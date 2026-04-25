@@ -19,9 +19,13 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-EMAIL_SENDER   = os.environ['EMAIL_SENDER']
-EMAIL_PASSWORD = os.environ['EMAIL_PASSWORD']
-EMAIL_RECEIVER = os.environ['EMAIL_RECEIVER']
+EMAIL_SENDER   = os.environ.get('EMAIL_SENDER')
+EMAIL_PASSWORD = os.environ.get('EMAIL_PASSWORD')
+EMAIL_RECEIVER = os.environ.get('EMAIL_RECEIVER')
+
+if not all([EMAIL_SENDER, EMAIL_PASSWORD, EMAIL_RECEIVER]):
+    log.error(f"Missing env vars. EMAIL_SENDER={EMAIL_SENDER}, EMAIL_RECEIVER={EMAIL_RECEIVER}, EMAIL_PASSWORD={'set' if EMAIL_PASSWORD else 'missing'}")
+    raise SystemExit(1)
 STATE_FILE     = 'seen_jobs.json'
 
 TARGETS = [
