@@ -18,15 +18,9 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-log.info(f"ENV KEYS: {list(os.environ.keys())}")
-
-EMAIL_SENDER   = os.environ.get('EMAIL_SENDER')
-EMAIL_PASSWORD = os.environ.get('EMAIL_PASSWORD')
-EMAIL_RECEIVER = os.environ.get('EMAIL_RECEIVER')
-
-if not all([EMAIL_SENDER, EMAIL_PASSWORD, EMAIL_RECEIVER]):
-    log.error(f"Missing env vars. EMAIL_SENDER={EMAIL_SENDER}, EMAIL_RECEIVER={EMAIL_RECEIVER}, EMAIL_PASSWORD={'set' if EMAIL_PASSWORD else 'missing'}")
-    raise SystemExit(1)
+EMAIL_SENDER   = 'a56946068@gmail.com'
+EMAIL_PASSWORD = 'utvt twha mphq idmm'
+EMAIL_RECEIVER = 'n.hesabian@gmail.com'
 
 STATE_FILE = 'seen_jobs.json'
 
@@ -46,7 +40,7 @@ BANK_URLS = {
     'Scotiabank': 'https://jobs.scotiabank.com/search/?q={}',
 }
 
-# ── State ─────────────────────────────────────────────────────────────────────
+# ── State ──────────────────────────────────────────────────────────────────────
 
 def load_state() -> set:
     if os.path.exists(STATE_FILE):
