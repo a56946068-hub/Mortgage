@@ -107,7 +107,7 @@ def scrape_bank_ats(targets):
             url   = BANK_URLS[bank].format(query)
             page  = ctx.new_page()
             try:
-                page.goto(url, wait_until='networkidle', timeout=20000)
+                page.goto(url, wait_until='domcontentloaded', timeout=30000)
                 page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
                 page.wait_for_timeout(3000)
                 tokens = set(role.lower().split())
