@@ -57,8 +57,8 @@ def save_state(state: set):
 # ── Scrapers ───────────────────────────────────────────────────────────────────
 
 def scrape_indeed(scraper, bank, role):
-    query = urllib.parse.quote(f'\"{role}\" \"{bank}\"')
-    url   = f\"https://ca.indeed.com/jobs?q={query}&l=Ontario&sort=date\"
+    query = urllib.parse.quote(f'"{role}" "{bank}"')
+    url   = f"https://ca.indeed.com/jobs?q={query}&l=Ontario&sort=date"
     res   = scraper.get(url, timeout=15)
     soup  = BeautifulSoup(res.text, 'html.parser')
     jobs  = []
@@ -76,8 +76,8 @@ def scrape_indeed(scraper, bank, role):
     return jobs
 
 def scrape_linkedin(scraper, bank, role):
-    query = urllib.parse.quote(f'\"{role}\" \"{bank}\"')
-    url   = f\"https://www.linkedin.com/jobs/search/?keywords={query}&location=Ontario&f_TPR=r86400\"
+    query = urllib.parse.quote(f'"{role}" "{bank}"')
+    url   = f"https://www.linkedin.com/jobs/search/?keywords={query}&location=Ontario&f_TPR=r86400"
     res   = scraper.get(url, timeout=15)
     soup  = BeautifulSoup(res.text, 'html.parser')
     jobs  = []
@@ -103,12 +103,12 @@ def scrape_bank_ats(targets):
         for target in targets:
             bank  = target['bank']
             role  = target['role']
-            query = urllib.parse.quote(f\"{role} Ontario\")
+            query = urllib.parse.quote(f"{role} Ontario")
             url   = BANK_URLS[bank].format(query)
             page  = ctx.new_page()
             try:
                 page.goto(url, wait_until='domcontentloaded', timeout=30000)
-                page.evaluate(\"window.scrollTo(0, document.body.scrollHeight)\")
+                page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
                 page.wait_for_timeout(3000)
                 tokens = set(role.lower().split())
                 for a in page.locator('a').all():
@@ -124,7 +124,7 @@ def scrape_bank_ats(targets):
                             'bank':   bank,
                         })
             except Exception as e:
-                log.warning(f\"ATS scrape failed [{bank}]: {e}\")
+                log.warning(f"ATS scrape failed [{bank}]: {e}")
             finally:
                 page.close()
         browser.close()
@@ -133,25 +133,25 @@ def scrape_bank_ats(targets):
 # ── Dedup ──────────────────────────────────────────────────────────────────────
 
 def fingerprint(job):
-    return f\"{job['bank']}::{job['title'].lower().strip()}\"
+    return f"{job['bank']}::{job['title'].lower().strip()}"
 
 # ── Email ──────────────────────────────────────────────────────────────────────
 
 def send_email(new_jobs):
     msg = MIMEMultipart('alternative')
-    msg['Subject'] = f\"Job Alert: {len(new_jobs)} New Ontario Role(s)\"
+    msg['Subject'] = f"Job Alert: {len(new_jobs)} New Ontario Role(s)"
     msg['From']    = EMAIL_SENDER
     msg['To']      = EMAIL_RECEIVER
 
-    rows = ''.join(f\"\"\"
+    rows = ''.join(f'''
         <tr>
           <td>{j['bank']}</td>
           <td>{j['title']}</td>
           <td>{j['source']}</td>
-          <td><a href=\"{j['link']}\">View</a></td>
-        </tr>\"\"\" for j in new_jobs)
+          <td><a href="{j['link']}">View</a></td>
+        </tr>''' for j in new_jobs)
 
-    html = f\"\"\"
+    html = f'''
     <html><head><style>
       table {{ border-collapse:collapse; width:100%; font-family:Arial,sans-serif; }}
       th,td {{ border:1px solid #ddd; padding:8px; text-align:left; }}
@@ -162,7 +162,7 @@ def send_email(new_jobs):
       <table><tr><th>Bank</th><th>Role</th><th>Source</th><th>Link</th></tr>
       {rows}
       </table>
-    </body></html>\"\"\"
+    </body></html>'''
 
     msg.attach(MIMEText(html, 'html'))
 
@@ -171,12 +171,12 @@ def send_email(new_jobs):
         srv.starttls()
         srv.login(EMAIL_SENDER, EMAIL_PASSWORD)
         srv.send_message(msg)
-        log.info(f\"Email sent — {len(new_jobs)} new jobs\")
+        log.info(f"Email sent — {len(new_jobs)} new jobs")
 
 # ── Core ───────────────────────────────────────────────────────────────────────
 
 def run():
-    log.info(\"── Scan started ──\")
+    log.info("── Scan started ──")
     scraper  = cloudscraper.create_scraper(
         browser={'browser': 'chrome', 'platform': 'windows', 'mobile': False}
     )
@@ -193,7 +193,7 @@ def run():
                         new_jobs.append(job)
                         seen_fps.add(fp)
             except Exception as e:
-                log.warning(f\"{func.__name__} failed [{target['bank']}]: {e}\")
+                log.warning(f"{func.__name__} failed [{target['bank']}]: {e}")
             time.sleep(3)
 
     try:
@@ -203,16 +203,16 @@ def run():
                 new_jobs.append(job)
                 seen_fps.add(fp)
     except Exception as e:
-        log.warning(f\"ATS scrape failed: {e}\")
+        log.warning(f"ATS scrape failed: {e}")
 
     if new_jobs:
         send_email(new_jobs)
         seen.update(job['id'] for job in new_jobs)
         save_state(seen)
     else:
-        log.info(\"No new jobs found\")
+        log.info("No new jobs found")
 
-    log.info(\"── Scan complete ──\")
+    log.info("── Scan complete ──")
 
 # ── Scheduler ─────────────────────────────────────────────────────────────────
 
