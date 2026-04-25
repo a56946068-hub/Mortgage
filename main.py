@@ -1,3 +1,5 @@
+import os
+print("ALL ENV VARS:", [k for k in os.environ.keys()])
 import cloudscraper
 from bs4 import BeautifulSoup
 import smtplib
