@@ -161,8 +161,8 @@ def send_email(new_jobs):
     auth = ("api", MAILGUN_API_KEY)
     data = {
         "from": f"Job Scraper <mailgun@{MAILGUN_DOMAIN}>",
-        # Both emails are now explicitly targeted here
-        "to": ["n.hesabian@gmail.com", "soldbyfarshad@gmail.com"],
+        # Single comma-separated string for multiple recipients
+        "to": "n.hesabian@gmail.com, soldbyfarshad@gmail.com",
         "subject": f"Job Alert: {len(new_jobs)} New Ontario Role(s)",
         "html": html
     }
