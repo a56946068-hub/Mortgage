@@ -164,10 +164,11 @@ def send_email(new_jobs):
       </table>
     </body></html>"""
 
-    msg.attach(MIMEText(html, 'html'))
-    with smtplib.SMTP_SSL('smtp.gmail.com', 465) as srv:
-        srv.login(EMAIL_SENDER, EMAIL_PASSWORD)
-        srv.send_message(msg)
+  with smtplib.SMTP('smtp.gmail.com', 587) as srv:
+    srv.ehlo()
+    srv.starttls()
+    srv.login(EMAIL_SENDER, EMAIL_PASSWORD)
+    srv.send_message(msg)
     log.info(f"Email sent — {len(new_jobs)} new jobs")
 
 # ── Core ───────────────────────────────────────────────────────────────────────
