@@ -4,3 +4,10 @@ builder = "nixpacks"
 [deploy]
 startCommand = "python main.py"
 restartPolicyType = "always"
+[build]
+builder = "nixpacks"
+buildCommand = "pip install -r requirements.txt && playwright install chromium"
+
+[deploy]
+startCommand = "python main.py"
+restartPolicyType = "always"
