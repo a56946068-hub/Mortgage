@@ -1,9 +1,7 @@
 import os
 import cloudscraper
 from bs4 import BeautifulSoup
-import smtplib
-from email.mime.text import MIMEText
-from email.mime.multipart import MIMEMultipart
+import requests
 import json
 import time
 import urllib.parse
@@ -18,9 +16,10 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-EMAIL_SENDER   = 'a56946068@gmail.com'
-EMAIL_PASSWORD = 'utvt twha mphq idmm'
-EMAIL_RECEIVER = 'n.hesabian@gmail.com'
+# Mailgun Config
+MAILGUN_API_KEY = 'YOUR_MAILGUN_API_KEY'
+MAILGUN_DOMAIN  = 'YOUR_MAILGUN_DOMAIN.mailgun.org'
+EMAIL_RECEIVER  = 'n.hesabian@gmail.com'
 
 STATE_FILE = 'seen_jobs.json'
 
@@ -138,11 +137,6 @@ def fingerprint(job):
 # ── Email ──────────────────────────────────────────────────────────────────────
 
 def send_email(new_jobs):
-    msg = MIMEMultipart('alternative')
-    msg['Subject'] = f"Job Alert: {len(new_jobs)} New Ontario Role(s)"
-    msg['From']    = EMAIL_SENDER
-    msg['To']      = EMAIL_RECEIVER
-
     rows = ''.join(f'''
         <tr>
           <td>{j['bank']}</td>
@@ -164,14 +158,21 @@ def send_email(new_jobs):
       </table>
     </body></html>'''
 
-    msg.attach(MIMEText(html, 'html'))
+    url = f"https://api.mailgun.net/v3/{MAILGUN_DOMAIN}/messages"
+    auth = ("api", MAILGUN_API_KEY)
+    data = {
+        "from": f"Job Scraper <mailgun@{MAILGUN_DOMAIN}>",
+        "to": [EMAIL_RECEIVER],
+        "subject": f"Job Alert: {len(new_jobs)} New Ontario Role(s)",
+        "html": html
+    }
 
-    with smtplib.SMTP('smtp.gmail.com', 587) as srv:
-        srv.ehlo()
-        srv.starttls()
-        srv.login(EMAIL_SENDER, EMAIL_PASSWORD)
-        srv.send_message(msg)
-        log.info(f"Email sent — {len(new_jobs)} new jobs")
+    res = requests.post(url, auth=auth, data=data)
+    
+    if res.status_code == 200:
+        log.info(f"Mailgun email sent — {len(new_jobs)} new jobs")
+    else:
+        log.error(f"Mailgun failed: {res.status_code} - {res.text}")
 
 # ── Core ───────────────────────────────────────────────────────────────────────
 
