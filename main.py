@@ -1,16 +1,13 @@
 import os
-print("ALL ENV VARS:", [k for k in os.environ.keys()])
 import cloudscraper
 from bs4 import BeautifulSoup
 import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
-import os
 import json
 import time
 import urllib.parse
 import logging
-import tempfile
 import schedule
 from playwright.sync_api import sync_playwright
 
@@ -21,6 +18,8 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
+log.info(f"ENV KEYS: {list(os.environ.keys())}")
+
 EMAIL_SENDER   = os.environ.get('EMAIL_SENDER')
 EMAIL_PASSWORD = os.environ.get('EMAIL_PASSWORD')
 EMAIL_RECEIVER = os.environ.get('EMAIL_RECEIVER')
@@ -28,7 +27,8 @@ EMAIL_RECEIVER = os.environ.get('EMAIL_RECEIVER')
 if not all([EMAIL_SENDER, EMAIL_PASSWORD, EMAIL_RECEIVER]):
     log.error(f"Missing env vars. EMAIL_SENDER={EMAIL_SENDER}, EMAIL_RECEIVER={EMAIL_RECEIVER}, EMAIL_PASSWORD={'set' if EMAIL_PASSWORD else 'missing'}")
     raise SystemExit(1)
-STATE_FILE     = 'seen_jobs.json'
+
+STATE_FILE = 'seen_jobs.json'
 
 TARGETS = [
     {'bank': 'RBC',        'role': 'Mortgage Specialist Assistant'},
@@ -46,7 +46,7 @@ BANK_URLS = {
     'Scotiabank': 'https://jobs.scotiabank.com/search/?q={}',
 }
 
-# ── State ────────────────────────────────────────────────────────────────────
+# ── State ─────────────────────────────────────────────────────────────────────
 
 def load_state() -> set:
     if os.path.exists(STATE_FILE):
@@ -60,7 +60,7 @@ def save_state(state: set):
         json.dump(list(state), f)
     os.replace(tmp, STATE_FILE)
 
-# ── Scrapers ─────────────────────────────────────────────────────────────────
+# ── Scrapers ───────────────────────────────────────────────────────────────────
 
 def scrape_indeed(scraper, bank, role):
     query = urllib.parse.quote(f'"{role}" "{bank}"')
@@ -136,12 +136,12 @@ def scrape_bank_ats(targets):
         browser.close()
     return jobs
 
-# ── Dedup ────────────────────────────────────────────────────────────────────
+# ── Dedup ──────────────────────────────────────────────────────────────────────
 
 def fingerprint(job):
     return f"{job['bank']}::{job['title'].lower().strip()}"
 
-# ── Email ────────────────────────────────────────────────────────────────────
+# ── Email ──────────────────────────────────────────────────────────────────────
 
 def send_email(new_jobs):
     msg = MIMEMultipart('alternative')
@@ -176,16 +176,16 @@ def send_email(new_jobs):
         srv.send_message(msg)
     log.info(f"Email sent — {len(new_jobs)} new jobs")
 
-# ── Core job ─────────────────────────────────────────────────────────────────
+# ── Core ───────────────────────────────────────────────────────────────────────
 
 def run():
     log.info("── Scan started ──")
-    scraper   = cloudscraper.create_scraper(
+    scraper  = cloudscraper.create_scraper(
         browser={'browser': 'chrome', 'platform': 'windows', 'mobile': False}
     )
-    seen      = load_state()
-    new_jobs  = []
-    seen_fps  = set()
+    seen     = load_state()
+    new_jobs = []
+    seen_fps = set()
 
     for target in TARGETS:
         for func in (scrape_indeed, scrape_linkedin):
@@ -217,10 +217,10 @@ def run():
 
     log.info("── Scan complete ──")
 
-# ── Scheduler ────────────────────────────────────────────────────────────────
+# ── Scheduler ─────────────────────────────────────────────────────────────────
 
 if __name__ == '__main__':
-    run()  # immediate run on start
+    run()
     schedule.every(1).hours.do(run)
     while True:
         schedule.run_pending()
