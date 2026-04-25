@@ -16,9 +16,9 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-# Mailgun Config
-MAILGUN_API_KEY = 'YOUR_MAILGUN_API_KEY'
-MAILGUN_DOMAIN  = 'YOUR_MAILGUN_DOMAIN.mailgun.org'
+# --- MAILGUN CONFIG ---
+MAILGUN_API_KEY = 'YOUR_MAILGUN_API_KEY'  # Get from Mailgun dashboard
+MAILGUN_DOMAIN  = 'YOUR_MAILGUN_DOMAIN.mailgun.org'  # Sandbox or custom domain
 EMAIL_RECEIVER  = 'n.hesabian@gmail.com'
 
 STATE_FILE = 'seen_jobs.json'
