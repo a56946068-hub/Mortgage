@@ -1,3 +1,46 @@
+import requests
+
+# Add these with your other globals
+MAILGUN_API_KEY = 'your-mailgun-api-key' # Get this from Mailgun dashboard
+MAILGUN_DOMAIN  = 'sandbox-whatever.mailgun.org' # Use your sandbox or custom domain
+
+def send_email(new_jobs):
+    rows = ''.join(f'''
+        <tr>
+          <td>{j['bank']}</td>
+          <td>{j['title']}</td>
+          <td>{j['source']}</td>
+          <td><a href="{j['link']}">View</a></td>
+        </tr>''' for j in new_jobs)
+
+    html = f'''
+    <html><head><style>
+      table {{ border-collapse:collapse; width:100%; font-family:Arial,sans-serif; }}
+      th,td {{ border:1px solid #ddd; padding:8px; text-align:left; }}
+      th {{ background:#f2f2f2; }}
+      a {{ color:#0066cc; font-weight:bold; text-decoration:none; }}
+    </style></head><body>
+      <h2>New Ontario Bank Roles</h2>
+      <table><tr><th>Bank</th><th>Role</th><th>Source</th><th>Link</th></tr>
+      {rows}
+      </table>
+    </body></html>'''
+
+    url = f"https://api.mailgun.net/v3/{MAILGUN_DOMAIN}/messages"
+    auth = ("api", MAILGUN_API_KEY)
+    data = {
+        "from": f"Job Scraper <mailgun@{MAILGUN_DOMAIN}>",
+        "to": [EMAIL_RECEIVER],
+        "subject": f"Job Alert: {len(new_jobs)} New Ontario Role(s)",
+        "html": html
+    }
+
+    res = requests.post(url, auth=auth, data=data)
+    
+    if res.status_code == 200:
+        log.info(f"Mailgun email sent — {len(new_jobs)} new jobs")
+    else:
+        log.error(f"Mailgun failed: {res.status_code} - {res.text}")
 cloudscraper
 beautifulsoup4
 playwright
