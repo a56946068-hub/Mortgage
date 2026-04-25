@@ -19,7 +19,6 @@ log = logging.getLogger(__name__)
 # --- MAILGUN CONFIG ---
 MAILGUN_API_KEY = '13c9f584ed3ef30c297bf31809e973c2-e3c0807f-ddb8ee73'
 MAILGUN_DOMAIN  = 'sandbox816ef6c8d4b6442abba468bc583c6726.mailgun.org'
-EMAIL_RECEIVER  = 'n.hesabian@gmail.com'
 
 STATE_FILE = 'seen_jobs.json'
 
@@ -160,10 +159,10 @@ def send_email(new_jobs):
 
     url = f"https://api.mailgun.net/v3/{MAILGUN_DOMAIN}/messages"
     auth = ("api", MAILGUN_API_KEY)
-  data = {
+    data = {
         "from": f"Job Scraper <mailgun@{MAILGUN_DOMAIN}>",
-        # Add your email to this list separated by a comma
-        "to": [EMAIL_RECEIVER, "soldbyfarshad@gmail.com"], 
+        # Both emails are now explicitly targeted here
+        "to": ["n.hesabian@gmail.com", "soldbyfarshad@gmail.com"],
         "subject": f"Job Alert: {len(new_jobs)} New Ontario Role(s)",
         "html": html
     }
