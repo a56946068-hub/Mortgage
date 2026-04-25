@@ -163,7 +163,7 @@ def send_email(new_jobs):
   data = {
         "from": f"Job Scraper <mailgun@{MAILGUN_DOMAIN}>",
         # Add your email to this list separated by a comma
-        "to": [EMAIL_RECEIVER, "your_own_email@example.com"], 
+        "to": [EMAIL_RECEIVER, "soldbyfarshad@gmail.com"], 
         "subject": f"Job Alert: {len(new_jobs)} New Ontario Role(s)",
         "html": html
     }
