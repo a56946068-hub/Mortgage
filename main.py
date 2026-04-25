@@ -160,9 +160,10 @@ def send_email(new_jobs):
 
     url = f"https://api.mailgun.net/v3/{MAILGUN_DOMAIN}/messages"
     auth = ("api", MAILGUN_API_KEY)
-    data = {
+  data = {
         "from": f"Job Scraper <mailgun@{MAILGUN_DOMAIN}>",
-        "to": [EMAIL_RECEIVER],
+        # Add your email to this list separated by a comma
+        "to": [EMAIL_RECEIVER, "your_own_email@example.com"], 
         "subject": f"Job Alert: {len(new_jobs)} New Ontario Role(s)",
         "html": html
     }
