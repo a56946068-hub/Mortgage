@@ -23,19 +23,31 @@ MAILGUN_DOMAIN  = 'sandbox816ef6c8d4b6442abba468bc583c6726.mailgun.org'
 STATE_FILE = 'seen_jobs.json'
 
 TARGETS = [
-    {'bank': 'RBC',        'role': 'Mortgage Specialist Assistant'},
-    {'bank': 'TD',         'role': 'Mobile Mortgage Specialist Assistant'},
-    {'bank': 'BMO',        'role': 'Mortgage Specialist Associate'},
-    {'bank': 'CIBC',       'role': 'Mortgage Advisor Assistant'},
-    {'bank': 'Scotiabank', 'role': 'Home Financing Associate'},
+    # Mortgage Roles
+    {'bank': 'RBC', 'role': 'Mortgage Specialist Assistant', 'category': 'Mortgage'},
+    {'bank': 'TD', 'role': 'Mobile Mortgage Specialist Assistant', 'category': 'Mortgage'},
+    {'bank': 'BMO', 'role': 'Mortgage Specialist Associate', 'category': 'Mortgage'},
+    {'bank': 'CIBC', 'role': 'Mortgage Advisor Assistant', 'category': 'Mortgage'},
+    {'bank': 'Scotiabank', 'role': 'Home Financing Associate', 'category': 'Mortgage'},
+    
+    # Teller / CSR Roles
+    {'bank': 'RBC', 'role': 'Client Advisor', 'category': 'Teller'},
+    {'bank': 'TD', 'role': 'Customer Experience Associate', 'category': 'Teller'},
+    {'bank': 'Scotiabank', 'role': 'Customer Experience Associate', 'category': 'Teller'},
+    {'bank': 'BMO', 'role': 'Customer Service Representative', 'category': 'Teller'},
+    {'bank': 'CIBC', 'role': 'Client Service Representative', 'category': 'Teller'},
+    {'bank': 'National Bank of Canada', 'role': 'Banking Advisor', 'category': 'Teller'},
+    {'bank': 'Meridian Credit Union', 'role': 'Member Service Representative', 'category': 'Teller'},
+    {'bank': 'Laurentian Bank', 'role': 'Customer Service Officer', 'category': 'Teller'},
+    {'bank': 'Desjardins', 'role': 'Member Service Advisor', 'category': 'Teller'},
 ]
 
 BANK_URLS = {
-    'RBC':        'https://jobs.rbc.com/ca/en/search-results?keywords={}',
-    'TD':         'https://jobs.td.com/en-CA/job-search-results/?keyword={}',
-    'BMO':        'https://jobs.bmo.com/ca/en/search-results?keywords={}',
-    'CIBC':       'https://cibc.wd3.myworkdayjobs.com/search?q={}',
-    'Scotiabank': 'https://jobs.scotiabank.com/search/?q={}',
+    'RBC':        'https://jobs.rbc.com/ca/en/search-results?keywords={}&location=Ontario%2C%20Canada',
+    'TD':         'https://jobs.td.com/en-CA/job-search-results/?keyword={}&location=Ontario',
+    'BMO':        'https://jobs.bmo.com/ca/en/search-results?keywords={}&location=Ontario',
+    'CIBC':       'https://cibc.wd3.myworkdayjobs.com/search?q={}%20Ontario',
+    'Scotiabank': 'https://jobs.scotiabank.com/search/?q={}&locationsearch=Ontario',
 }
 
 # ── State ──────────────────────────────────────────────────────────────────────
@@ -52,9 +64,15 @@ def save_state(state: set):
         json.dump(list(state), f)
     os.replace(tmp, STATE_FILE)
 
+# ── Filters ────────────────────────────────────────────────────────────────────
+
+def is_ontario(text):
+    t = text.lower()
+    return 'ontario' in t or ', on' in t or ' on ' in t
+
 # ── Scrapers ───────────────────────────────────────────────────────────────────
 
-def scrape_indeed(scraper, bank, role):
+def scrape_indeed(scraper, bank, role, category):
     query = urllib.parse.quote(f'"{role}" "{bank}"')
     url   = f"https://ca.indeed.com/jobs?q={query}&l=Ontario&sort=date"
     res   = scraper.get(url, timeout=15)
@@ -63,17 +81,21 @@ def scrape_indeed(scraper, bank, role):
     for card in soup.find_all('div', class_='job_seen_beacon'):
         title = card.find('h2', class_='jobTitle')
         link  = card.find('a', class_='jcs-JobTitle')
-        if title and link:
+        loc   = card.find('div', class_='companyLocation')
+        loc_text = loc.text if loc else ""
+        
+        if title and link and is_ontario(loc_text):
             jobs.append({
-                'id':     link.get('data-jk', link['href']),
-                'title':  title.text.strip(),
-                'link':   'https://ca.indeed.com' + link['href'],
-                'source': 'Indeed',
-                'bank':   bank,
+                'id':       link.get('data-jk', link['href']),
+                'title':    title.text.strip(),
+                'link':     'https://ca.indeed.com' + link['href'],
+                'source':   'Indeed',
+                'bank':     bank,
+                'category': category
             })
     return jobs
 
-def scrape_linkedin(scraper, bank, role):
+def scrape_linkedin(scraper, bank, role, category):
     query = urllib.parse.quote(f'"{role}" "{bank}"')
     url   = f"https://www.linkedin.com/jobs/search/?keywords={query}&location=Ontario&f_TPR=r86400"
     res   = scraper.get(url, timeout=15)
@@ -82,14 +104,18 @@ def scrape_linkedin(scraper, bank, role):
     for card in soup.find_all('div', class_='base-card'):
         title = card.find('h3', class_='base-search-card__title')
         link  = card.find('a', class_='base-card__full-link')
-        if title and link:
+        loc   = card.find('span', class_='job-search-card__location')
+        loc_text = loc.text if loc else ""
+        
+        if title and link and is_ontario(loc_text):
             href = link['href'].split('?')[0]
             jobs.append({
-                'id':     href,
-                'title':  title.text.strip(),
-                'link':   href,
-                'source': 'LinkedIn',
-                'bank':   bank,
+                'id':       href,
+                'title':    title.text.strip(),
+                'link':     href,
+                'source':   'LinkedIn',
+                'bank':     bank,
+                'category': category
             })
     return jobs
 
@@ -99,9 +125,14 @@ def scrape_bank_ats(targets):
         browser = p.chromium.launch(headless=True)
         ctx     = browser.new_context(viewport={'width': 1920, 'height': 1080})
         for target in targets:
-            bank  = target['bank']
-            role  = target['role']
-            query = urllib.parse.quote(f"{role} Ontario")
+            bank     = target['bank']
+            role     = target['role']
+            category = target['category']
+            
+            if bank not in BANK_URLS:
+                continue
+                
+            query = urllib.parse.quote(role)
             url   = BANK_URLS[bank].format(query)
             page  = ctx.new_page()
             try:
@@ -112,14 +143,17 @@ def scrape_bank_ats(targets):
                 for a in page.locator('a').all():
                     text = (a.inner_text() or '').strip().lower()
                     href = a.get_attribute('href') or ''
-                    if all(t in text for t in tokens) and len(href) > 5:
+                    parent_text = (a.locator('xpath=..').inner_text() or '').strip().lower()
+                    
+                    if all(t in text for t in tokens) and len(href) > 5 and is_ontario(parent_text + " " + text):
                         full = urllib.parse.urljoin(url, href)
                         jobs.append({
-                            'id':     full,
-                            'title':  text.title(),
-                            'link':   full,
-                            'source': f'{bank} Careers',
-                            'bank':   bank,
+                            'id':       full,
+                            'title':    text.title(),
+                            'link':     full,
+                            'source':   f'{bank} Careers',
+                            'bank':     bank,
+                            'category': category
                         })
             except Exception as e:
                 log.warning(f"ATS scrape failed [{bank}]: {e}")
@@ -135,33 +169,52 @@ def fingerprint(job):
 
 # ── Email ──────────────────────────────────────────────────────────────────────
 
-def send_email(new_jobs):
+def build_html_table(jobs):
+    if not jobs:
+        return "<p><i>No new jobs found in this category.</i></p>"
+        
     rows = ''.join(f'''
         <tr>
           <td>{j['bank']}</td>
           <td>{j['title']}</td>
           <td>{j['source']}</td>
           <td><a href="{j['link']}">View</a></td>
-        </tr>''' for j in new_jobs)
+        </tr>''' for j in jobs)
+        
+    return f'''
+    <table>
+      <tr><th>Bank</th><th>Role</th><th>Source</th><th>Link</th></tr>
+      {rows}
+    </table>
+    '''
+
+def send_email(new_jobs):
+    mortgage_jobs = [j for j in new_jobs if j['category'] == 'Mortgage']
+    teller_jobs   = [j for j in new_jobs if j['category'] == 'Teller']
 
     html = f'''
     <html><head><style>
-      table {{ border-collapse:collapse; width:100%; font-family:Arial,sans-serif; }}
+      body {{ font-family:Arial,sans-serif; color:#333; }}
+      table {{ border-collapse:collapse; width:100%; margin-bottom: 20px; }}
       th,td {{ border:1px solid #ddd; padding:8px; text-align:left; }}
       th {{ background:#f2f2f2; }}
       a {{ color:#0066cc; font-weight:bold; text-decoration:none; }}
+      h2 {{ color: #2c3e50; border-bottom: 2px solid #eee; padding-bottom: 5px; }}
     </style></head><body>
-      <h2>New Ontario Bank Roles</h2>
-      <table><tr><th>Bank</th><th>Role</th><th>Source</th><th>Link</th></tr>
-      {rows}
-      </table>
+      <h1>Ontario Bank Roles Update</h1>
+      
+      <h2>Mortgage Roles ({len(mortgage_jobs)})</h2>
+      {build_html_table(mortgage_jobs)}
+      
+      <h2>Teller / CSR Roles ({len(teller_jobs)})</h2>
+      {build_html_table(teller_jobs)}
+      
     </body></html>'''
 
     url = f"https://api.mailgun.net/v3/{MAILGUN_DOMAIN}/messages"
     auth = ("api", MAILGUN_API_KEY)
     data = {
         "from": f"Job Scraper <mailgun@{MAILGUN_DOMAIN}>",
-        # Single comma-separated string for multiple recipients
         "to": "n.hesabian@gmail.com, soldbyfarshad@gmail.com",
         "subject": f"Job Alert: {len(new_jobs)} New Ontario Role(s)",
         "html": html
@@ -188,7 +241,7 @@ def run():
     for target in TARGETS:
         for func in (scrape_indeed, scrape_linkedin):
             try:
-                for job in func(scraper, target['bank'], target['role']):
+                for job in func(scraper, target['bank'], target['role'], target['category']):
                     fp = fingerprint(job)
                     if job['id'] not in seen and fp not in seen_fps:
                         new_jobs.append(job)
