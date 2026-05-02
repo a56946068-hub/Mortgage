@@ -1,12 +1,14 @@
 import os
+import smtplib
 import cloudscraper
 from bs4 import BeautifulSoup
-import requests
 import json
 import time
 import urllib.parse
 import logging
 import schedule
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
 from playwright.sync_api import sync_playwright
 
 logging.basicConfig(
@@ -16,9 +18,9 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-# --- MAILGUN CONFIG ---
-MAILGUN_API_KEY = '13c9f584ed3ef30c297bf31809e973c2-e3c0807f-ddb8ee73'
-MAILGUN_DOMAIN  = 'sandbox816ef6c8d4b6442abba468bc583c6726.mailgun.org'
+# --- GMAIL CONFIG ---
+GMAIL_ADDRESS  = 'soldbyfarshad@gmail.com'
+GMAIL_APP_PASS = 'lohi pscs bwdr ebbo'
 
 STATE_FILE = 'seen_jobs.json'
 
@@ -29,7 +31,7 @@ TARGETS = [
     {'bank': 'BMO', 'role': 'Mortgage Specialist Associate', 'category': 'Mortgage'},
     {'bank': 'CIBC', 'role': 'Mortgage Advisor Assistant', 'category': 'Mortgage'},
     {'bank': 'Scotiabank', 'role': 'Home Financing Associate', 'category': 'Mortgage'},
-    
+
     # Teller / CSR Roles
     {'bank': 'RBC', 'role': 'Client Advisor', 'category': 'Teller'},
     {'bank': 'TD', 'role': 'Customer Experience Associate', 'category': 'Teller'},
@@ -83,7 +85,7 @@ def scrape_indeed(scraper, bank, role, category):
         link  = card.find('a', class_='jcs-JobTitle')
         loc   = card.find('div', class_='companyLocation')
         loc_text = loc.text if loc else ""
-        
+
         if title and link and is_ontario(loc_text):
             jobs.append({
                 'id':       link.get('data-jk', link['href']),
@@ -106,7 +108,7 @@ def scrape_linkedin(scraper, bank, role, category):
         link  = card.find('a', class_='base-card__full-link')
         loc   = card.find('span', class_='job-search-card__location')
         loc_text = loc.text if loc else ""
-        
+
         if title and link and is_ontario(loc_text):
             href = link['href'].split('?')[0]
             jobs.append({
@@ -128,10 +130,10 @@ def scrape_bank_ats(targets):
             bank     = target['bank']
             role     = target['role']
             category = target['category']
-            
+
             if bank not in BANK_URLS:
                 continue
-                
+
             query = urllib.parse.quote(role)
             url   = BANK_URLS[bank].format(query)
             page  = ctx.new_page()
@@ -144,7 +146,7 @@ def scrape_bank_ats(targets):
                     text = (a.inner_text() or '').strip().lower()
                     href = a.get_attribute('href') or ''
                     parent_text = (a.locator('xpath=..').inner_text() or '').strip().lower()
-                    
+
                     if all(t in text for t in tokens) and len(href) > 5 and is_ontario(parent_text + " " + text):
                         full = urllib.parse.urljoin(url, href)
                         jobs.append({
@@ -172,7 +174,7 @@ def fingerprint(job):
 def build_html_table(jobs):
     if not jobs:
         return "<p><i>No new jobs found in this category.</i></p>"
-        
+
     rows = ''.join(f'''
         <tr>
           <td>{j['bank']}</td>
@@ -180,7 +182,7 @@ def build_html_table(jobs):
           <td>{j['source']}</td>
           <td><a href="{j['link']}">View</a></td>
         </tr>''' for j in jobs)
-        
+
     return f'''
     <table>
       <tr><th>Bank</th><th>Role</th><th>Source</th><th>Link</th></tr>
@@ -202,30 +204,30 @@ def send_email(new_jobs):
       h2 {{ color: #2c3e50; border-bottom: 2px solid #eee; padding-bottom: 5px; }}
     </style></head><body>
       <h1>Ontario Bank Roles Update</h1>
-      
+
       <h2>Mortgage Roles ({len(mortgage_jobs)})</h2>
       {build_html_table(mortgage_jobs)}
-      
+
       <h2>Teller / CSR Roles ({len(teller_jobs)})</h2>
       {build_html_table(teller_jobs)}
-      
+
     </body></html>'''
 
-    url = f"https://api.mailgun.net/v3/{MAILGUN_DOMAIN}/messages"
-    auth = ("api", MAILGUN_API_KEY)
-    data = {
-        "from": f"Job Scraper <mailgun@{MAILGUN_DOMAIN}>",
-        "to": "n.hesabian@gmail.com, soldbyfarshad@gmail.com",
-        "subject": f"Job Alert: {len(new_jobs)} New Ontario Role(s)",
-        "html": html
-    }
+    recipients = ['n.hesabian@gmail.com', 'soldbyfarshad@gmail.com']
 
-    res = requests.post(url, auth=auth, data=data)
-    
-    if res.status_code == 200:
-        log.info(f"Mailgun email sent — {len(new_jobs)} new jobs")
-    else:
-        log.error(f"Mailgun failed: {res.status_code} - {res.text}")
+    msg = MIMEMultipart('alternative')
+    msg['Subject'] = f"Job Alert: {len(new_jobs)} New Ontario Role(s)"
+    msg['From']    = f"Job Scraper <{GMAIL_ADDRESS}>"
+    msg['To']      = ', '.join(recipients)
+    msg.attach(MIMEText(html, 'html'))
+
+    try:
+        with smtplib.SMTP_SSL('smtp.gmail.com', 465) as server:
+            server.login(GMAIL_ADDRESS, GMAIL_APP_PASS)
+            server.sendmail(GMAIL_ADDRESS, recipients, msg.as_string())
+        log.info(f"Gmail sent — {len(new_jobs)} new jobs")
+    except Exception as e:
+        log.error(f"Gmail failed: {e}")
 
 # ── Core ───────────────────────────────────────────────────────────────────────
 
