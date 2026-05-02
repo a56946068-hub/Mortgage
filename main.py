@@ -19,7 +19,7 @@ logging.basicConfig(
 log = logging.getLogger(__name__)
 
 # --- GMAIL CONFIG ---
-GMAIL_ADDRESS  = 'your.email@gmail.com'
+GMAIL_ADDRESS  = 'soldbyfarshad@gmail.com'
 GMAIL_APP_PASS = 'lohi pscs bwdr ebbo'
 
 STATE_FILE = 'seen_jobs.json'
