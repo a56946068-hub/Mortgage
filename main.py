@@ -19,7 +19,7 @@ logging.basicConfig(
 log = logging.getLogger(__name__)
 
 # --- GMAIL CONFIG ---
-GMAIL_ADDRESS  = 'soldbyfarshad@gmail.com'
+GMAIL_ADDRESS  = 'your.email@gmail.com'
 GMAIL_APP_PASS = 'lohi pscs bwdr ebbo'
 
 STATE_FILE = 'seen_jobs.json'
@@ -222,7 +222,9 @@ def send_email(new_jobs):
     msg.attach(MIMEText(html, 'html'))
 
     try:
-        with smtplib.SMTP_SSL('smtp.gmail.com', 465) as server:
+        with smtplib.SMTP('smtp.gmail.com', 587) as server:
+            server.ehlo()
+            server.starttls()
             server.login(GMAIL_ADDRESS, GMAIL_APP_PASS)
             server.sendmail(GMAIL_ADDRESS, recipients, msg.as_string())
         log.info(f"Gmail sent — {len(new_jobs)} new jobs")
