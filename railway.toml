@@ -3,3 +3,6 @@ buildCommand = "pip install -r requirements.txt && playwright install-deps chrom
 
 [deploy]
 startCommand = "python main.py"
+
+[deploy.environmentVariables]
+PLAYWRIGHT_BROWSERS_PATH = "/app/pw-browsers"
