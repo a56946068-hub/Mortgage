@@ -1,7 +1,2 @@
-cloudscraper
-beautifulsoup4
-requests
-schedule
-playwright
 playwright install-deps chromium
 playwright install chromium
