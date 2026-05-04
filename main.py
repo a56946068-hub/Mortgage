@@ -1,5 +1,6 @@
 import os
-os.environ.setdefault('PLAYWRIGHT_BROWSERS_PATH', '/app/pw-browsers')
+os.environ['PLAYWRIGHT_BROWSERS_PATH'] = '/app/pw-browsers'
+
 import smtplib
 import cloudscraper
 from bs4 import BeautifulSoup
