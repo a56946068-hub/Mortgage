@@ -7,6 +7,7 @@ import time
 import urllib.parse
 import logging
 import schedule
+import requests
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from playwright.sync_api import sync_playwright
@@ -18,9 +19,8 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-# --- GMAIL CONFIG ---
-GMAIL_ADDRESS  = 'soldbyfarshad@gmail.com'
-GMAIL_APP_PASS = 'lohi pscs bwdr ebbo'
+# --- RESEND CONFIG ---
+RESEND_API_KEY = os.environ.get('RESEND_API_KEY')
 
 STATE_FILE = 'seen_jobs.json'
 
@@ -213,23 +213,26 @@ def send_email(new_jobs):
 
     </body></html>'''
 
-    recipients = ['n.hesabian@gmail.com', 'soldbyfarshad@gmail.com']
-
-    msg = MIMEMultipart('alternative')
-    msg['Subject'] = f"Job Alert: {len(new_jobs)} New Ontario Role(s)"
-    msg['From']    = f"Job Scraper <{GMAIL_ADDRESS}>"
-    msg['To']      = ', '.join(recipients)
-    msg.attach(MIMEText(html, 'html'))
-
     try:
-        with smtplib.SMTP('smtp.gmail.com', 587) as server:
-            server.ehlo()
-            server.starttls()
-            server.login(GMAIL_ADDRESS, GMAIL_APP_PASS)
-            server.sendmail(GMAIL_ADDRESS, recipients, msg.as_string())
-        log.info(f"Gmail sent — {len(new_jobs)} new jobs")
+        res = requests.post(
+            'https://api.resend.com/emails',
+            headers={
+                'Authorization': f'Bearer {RESEND_API_KEY}',
+                'Content-Type': 'application/json'
+            },
+            json={
+                'from': 'Job Scraper <onboarding@resend.dev>',
+                'to': ['n.hesabian@gmail.com', 'soldbyfarshad@gmail.com'],
+                'subject': f'Job Alert: {len(new_jobs)} New Ontario Role(s)',
+                'html': html
+            }
+        )
+        if res.status_code == 200:
+            log.info(f"Resend email sent — {len(new_jobs)} new jobs")
+        else:
+            log.error(f"Resend failed: {res.status_code} - {res.text}")
     except Exception as e:
-        log.error(f"Gmail failed: {e}")
+        log.error(f"Resend error: {e}")
 
 # ── Core ───────────────────────────────────────────────────────────────────────
 
