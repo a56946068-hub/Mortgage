@@ -1,5 +1,2 @@
-[build]
-buildCommand = "pip install -r requirements.txt && PLAYWRIGHT_BROWSERS_PATH=/app/pw-browsers playwright install chromium --with-deps"
-
 [deploy]
-startCommand = "PLAYWRIGHT_BROWSERS_PATH=/app/pw-browsers python main.py"
+startCommand = "python main.py"
