@@ -156,9 +156,12 @@ def scrape_bank_ats(targets):
                 page.wait_for_timeout(1500)
                 tokens = set(role.lower().split())
                 for a in page.locator('a').all():
-                    text = (a.inner_text() or '').strip().lower()
-                    href = a.get_attribute('href') or ''
-                    parent_text = (a.locator('xpath=..').inner_text() or '').strip().lower()
+                    try:
+                        text        = a.evaluate('el => el.innerText').strip().lower()
+                        href        = a.evaluate('el => el.href') or ''
+                        parent_text = a.evaluate('el => el.parentElement ? el.parentElement.innerText : ""').strip().lower()
+                    except Exception:
+                        continue
 
                     if all(t in text for t in tokens) and len(href) > 5 and is_gta(parent_text + " " + text):
                         full = urllib.parse.urljoin(url, href)
@@ -235,7 +238,7 @@ def send_email(new_jobs):
             },
             json={
                 'from': 'Job Scraper <onboarding@resend.dev>',
-                'to': ['soldbyfarshad@gmail.com', 'n.hesabian@gmail.com'],
+                'to': ['soldbyfarshad@gmail.com'],
                 'subject': f'Job Alert: {len(new_jobs)} New Ontario Role(s)',
                 'html': html
             }
