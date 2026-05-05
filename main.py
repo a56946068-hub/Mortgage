@@ -1,7 +1,6 @@
 import os
 os.environ['PLAYWRIGHT_BROWSERS_PATH'] = '/app/pw-browsers'
 
-import smtplib
 import cloudscraper
 from bs4 import BeautifulSoup
 import json
@@ -10,8 +9,6 @@ import urllib.parse
 import logging
 import schedule
 import requests
-from email.mime.multipart import MIMEMultipart
-from email.mime.text import MIMEText
 from playwright.sync_api import sync_playwright
 
 logging.basicConfig(
@@ -126,8 +123,18 @@ def scrape_linkedin(scraper, bank, role, category):
 def scrape_bank_ats(targets):
     jobs = []
     with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True)
-        ctx     = browser.new_context(viewport={'width': 1920, 'height': 1080})
+        browser = p.chromium.launch(
+            headless=True,
+            args=[
+                '--no-sandbox',
+                '--disable-setuid-sandbox',
+                '--disable-dev-shm-usage',
+                '--disable-gpu',
+                '--single-process',
+                '--no-zygote',
+            ]
+        )
+        ctx = browser.new_context(viewport={'width': 1920, 'height': 1080})
         for target in targets:
             bank     = target['bank']
             role     = target['role']
@@ -240,7 +247,7 @@ def send_email(new_jobs):
 
 def run():
     log.info("── Scan started ──")
-    scraper  = cloudscraper.create_scraper(
+    scraper = cloudscraper.create_scraper(
         browser={'browser': 'chrome', 'platform': 'windows', 'mobile': False}
     )
     seen     = load_state()
