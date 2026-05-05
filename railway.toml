@@ -1,5 +1,5 @@
 [build]
-buildCommand = "apt-get update && apt-get install -y libglib2.0-0 libnss3 libatk1.0-0 libatk-bridge2.0-0 libcups2 libdrm2 libxkbcommon0 libxcomposite1 libxdamage1 libxfixes3 libxrandr2 libgbm1 libasound2 && pip install -r requirements.txt && PLAYWRIGHT_BROWSERS_PATH=/app/pw-browsers playwright install-deps chromium && PLAYWRIGHT_BROWSERS_PATH=/app/pw-browsers playwright install chromium"
+buildCommand = "pip install -r requirements.txt && PLAYWRIGHT_BROWSERS_PATH=/app/pw-browsers playwright install chromium --with-deps"
 
 [deploy]
 startCommand = "PLAYWRIGHT_BROWSERS_PATH=/app/pw-browsers python main.py"
