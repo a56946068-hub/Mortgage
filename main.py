@@ -21,6 +21,13 @@ RESEND_API_KEY = os.environ.get('RESEND_API_KEY')
 
 STATE_FILE = 'seen_jobs.json'
 
+GTA_CITIES = [
+    'richmond hill', 'vaughan', 'markham', 'toronto', 'north york',
+    'scarborough', 'mississauga', 'brampton', 'oakville', 'aurora',
+    'newmarket', 'king city', 'woodbridge', 'maple', 'concord',
+    'thornhill', 'stouffville', 'ajax', 'pickering', 'whitby'
+]
+
 TARGETS = [
     # Mortgage Roles
     {'bank': 'RBC', 'role': 'Mortgage Specialist Assistant', 'category': 'Mortgage'},
@@ -65,25 +72,23 @@ def save_state(state: set):
 
 # ── Filters ────────────────────────────────────────────────────────────────────
 
-def is_ontario(text):
+def is_gta(text):
     t = text.lower()
-    return 'ontario' in t or ', on' in t or ' on ' in t
+    return any(city in t for city in GTA_CITIES)
 
 # ── Scrapers ───────────────────────────────────────────────────────────────────
 
 def scrape_indeed(scraper, bank, role, category):
     query = urllib.parse.quote(f'"{role}" "{bank}"')
-    url   = f"https://ca.indeed.com/jobs?q={query}&l=Ontario&sort=date"
+    url   = f"https://ca.indeed.com/jobs?q={query}&l=L4C+1H8&radius=30&sort=date"
     res   = scraper.get(url, timeout=15)
     soup  = BeautifulSoup(res.text, 'html.parser')
     jobs  = []
     for card in soup.find_all('div', class_='job_seen_beacon'):
         title = card.find('h2', class_='jobTitle')
         link  = card.find('a', class_='jcs-JobTitle')
-        loc   = card.find('div', class_='companyLocation')
-        loc_text = loc.text if loc else ""
 
-        if title and link and is_ontario(loc_text):
+        if title and link:
             jobs.append({
                 'id':       link.get('data-jk', link['href']),
                 'title':    title.text.strip(),
@@ -96,7 +101,7 @@ def scrape_indeed(scraper, bank, role, category):
 
 def scrape_linkedin(scraper, bank, role, category):
     query = urllib.parse.quote(f'"{role}" "{bank}"')
-    url   = f"https://www.linkedin.com/jobs/search/?keywords={query}&location=Ontario&f_TPR=r86400"
+    url   = f"https://www.linkedin.com/jobs/search/?keywords={query}&location=Richmond+Hill%2C+Ontario&distance=30&f_TPR=r86400"
     res   = scraper.get(url, timeout=15)
     soup  = BeautifulSoup(res.text, 'html.parser')
     jobs  = []
@@ -106,7 +111,7 @@ def scrape_linkedin(scraper, bank, role, category):
         loc   = card.find('span', class_='job-search-card__location')
         loc_text = loc.text if loc else ""
 
-        if title and link and is_ontario(loc_text):
+        if title and link and is_gta(loc_text):
             href = link['href'].split('?')[0]
             jobs.append({
                 'id':       href,
@@ -154,7 +159,7 @@ def scrape_bank_ats(targets):
                     href = a.get_attribute('href') or ''
                     parent_text = (a.locator('xpath=..').inner_text() or '').strip().lower()
 
-                    if all(t in text for t in tokens) and len(href) > 5 and is_ontario(parent_text + " " + text):
+                    if all(t in text for t in tokens) and len(href) > 5 and is_gta(parent_text + " " + text):
                         full = urllib.parse.urljoin(url, href)
                         jobs.append({
                             'id':       full,
@@ -229,7 +234,7 @@ def send_email(new_jobs):
             },
             json={
                 'from': 'Job Scraper <onboarding@resend.dev>',
-                'to': ['soldbyfarshad@gmail.com'],
+                'to': ['soldbyfarshad@gmail.com', 'n.hesabian@gmail.com'],
                 'subject': f'Job Alert: {len(new_jobs)} New Ontario Role(s)',
                 'html': html
             }
