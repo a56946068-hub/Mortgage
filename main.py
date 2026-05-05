@@ -1,6 +1,4 @@
 import os
-os.environ['PLAYWRIGHT_BROWSERS_PATH'] = '/app/pw-browsers'
-
 import cloudscraper
 from bs4 import BeautifulSoup
 import json
