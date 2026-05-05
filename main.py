@@ -238,7 +238,7 @@ def send_email(new_jobs):
             },
             json={
                 'from': 'Job Scraper <onboarding@resend.dev>',
-                'to': ['soldbyfarshad@gmail.com'],
+                'to': ['n.hesabian@gmail.com'],
                 'subject': f'Job Alert: {len(new_jobs)} New Ontario Role(s)',
                 'html': html
             }
