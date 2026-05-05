@@ -1,4 +1,5 @@
 import os
+import signal
 import cloudscraper
 from bs4 import BeautifulSoup
 import json
@@ -49,11 +50,11 @@ TARGETS = [
 ]
 
 BANK_URLS = {
-    'RBC':        'https://jobs.rbc.com/ca/en/search-results?keywords={}&location=Ontario%2C%20Canada',
-    'TD':         'https://jobs.td.com/en-CA/job-search-results/?keyword={}&location=Ontario',
-    'BMO':        'https://jobs.bmo.com/ca/en/search-results?keywords={}&location=Ontario',
+    'RBC':        'https://jobs.rbc.com/ca/en/search-results?keywords={}&location=Richmond+Hill%2C+Ontario%2C+Canada',
+    'TD':         'https://jobs.td.com/en-CA/job-search-results/?keyword={}&location=Richmond+Hill',
+    'BMO':        'https://jobs.bmo.com/ca/en/search-results?keywords={}&location=Richmond+Hill%2C+Ontario',
     'CIBC':       'https://cibc.wd3.myworkdayjobs.com/search?q={}%20Ontario',
-    'Scotiabank': 'https://jobs.scotiabank.com/search/?q={}&locationsearch=Ontario',
+    'Scotiabank': 'https://jobs.scotiabank.com/search/?q={}&locationsearch=Richmond+Hill',
 }
 
 # ── State ──────────────────────────────────────────────────────────────────────
@@ -150,9 +151,9 @@ def scrape_bank_ats(targets):
             url   = BANK_URLS[bank].format(query)
             page  = ctx.new_page()
             try:
-                page.goto(url, wait_until='domcontentloaded', timeout=30000)
+                page.goto(url, wait_until='domcontentloaded', timeout=15000)
                 page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
-                page.wait_for_timeout(3000)
+                page.wait_for_timeout(1500)
                 tokens = set(role.lower().split())
                 for a in page.locator('a').all():
                     text = (a.inner_text() or '').strip().lower()
@@ -269,13 +270,20 @@ def run():
                 log.warning(f"{func.__name__} failed [{target['bank']}]: {e}")
             time.sleep(3)
 
+    def timeout_handler(signum, frame):
+        raise TimeoutError("ATS scrape timed out")
+
+    signal.signal(signal.SIGALRM, timeout_handler)
+    signal.alarm(120)
     try:
         for job in scrape_bank_ats(TARGETS):
             fp = fingerprint(job)
             if job['id'] not in seen and fp not in seen_fps:
                 new_jobs.append(job)
                 seen_fps.add(fp)
-    except Exception as e:
+        signal.alarm(0)
+    except (Exception, TimeoutError) as e:
+        signal.alarm(0)
         log.warning(f"ATS scrape failed: {e}")
 
     if new_jobs:
