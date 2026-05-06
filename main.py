@@ -126,7 +126,13 @@ def scrape_linkedin(scraper, bank, role, category):
 def scrape_bank_ats(targets):
     log.info("  [ATS] Starting browser")
     jobs = []
-    js_parent = 'el => el.parentElement ? el.parentElement.innerText : ""'
+    js_extract = '''() => {
+        return Array.from(document.querySelectorAll('a')).slice(0, 50).map(a => ({
+            text: a.innerText || '',
+            href: a.href || '',
+            parent: a.parentElement ? a.parentElement.innerText : ''
+        }));
+    }'''
     with sync_playwright() as p:
         browser = p.chromium.launch(
             headless=True,
@@ -164,22 +170,18 @@ def scrape_bank_ats(targets):
                 page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
                 page.wait_for_timeout(1500)
                 tokens = set(role.lower().split())
-                all_links = page.locator('a').all()
-                log.info(f"  [ATS] {bank} — {role} → {len(all_links)} links to scan")
+                links = page.evaluate(js_extract)
+                log.info(f"  [ATS] {bank} — {role} → {len(links)} links to scan")
                 found = 0
-                for a in all_links:
-                    try:
-                        text = a.evaluate('el => el.innerText').strip().lower()
-                        href = a.evaluate('el => el.href') or ''
-                        parent_text = a.evaluate(js_parent).strip().lower()
-                    except Exception:
-                        continue
-                    if all(t in text for t in tokens) and len(href) > 5 and is_gta(parent_text + " " + text):
-                        full = urllib.parse.urljoin(url, href)
+                for link in links:
+                    text = link['text'].strip().lower()
+                    href = link['href'].strip()
+                    parent_text = link['parent'].strip().lower()
+                    if all(t in text for t in tokens) and len(href) > 5 and is_gta(parent_text + ' ' + text):
                         jobs.append({
-                            'id': full,
+                            'id': href,
                             'title': text.title(),
-                            'link': full,
+                            'link': href,
                             'source': f'{bank} Careers',
                             'bank': bank,
                             'category': category
