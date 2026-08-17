@@ -1,13 +1,14 @@
 import os
-import signal
 import json
 import time
 import urllib.parse
 import logging
+import re
 import schedule
 import requests
 from bs4 import BeautifulSoup
-from playwright.sync_api import sync_playwright
+from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeout
+from datetime import datetime
 
 # ── Logging ────────────────────────────────────────────────────────────────────
 logging.basicConfig(
@@ -22,76 +23,49 @@ RESEND_API_KEY = os.environ.get('RESEND_API_KEY', '').strip()
 ALERT_EMAIL    = os.environ.get('ALERT_EMAIL', 'n.hesabian@gmail.com').strip()
 FROM_EMAIL     = os.environ.get('FROM_EMAIL', 'onboarding@resend.dev').strip()
 STATE_FILE     = '/tmp/seen_jobs.json'
+NAV_TIMEOUT    = 25000
+WAIT_AFTER     = 2500
 
 GTA_CITIES = {
     'richmond hill', 'vaughan', 'markham', 'toronto', 'north york',
     'scarborough', 'mississauga', 'brampton', 'oakville', 'aurora',
     'newmarket', 'king city', 'woodbridge', 'maple', 'concord',
-    'thornhill', 'stouffville', 'ajax', 'pickering', 'whitby', 'ontario',
+    'thornhill', 'stouffville', 'ajax', 'pickering', 'whitby',
     'etobicoke', 'york', 'east york', 'don mills', 'weston',
 }
+# Ontario as a standalone match is too broad — only allow it from ATS
+GTA_CITIES_STRICT = GTA_CITIES  # used for Indeed/LinkedIn
+GTA_CITIES_ATS    = GTA_CITIES | {'ontario'}  # ATS pages often just say Ontario
 
 TARGETS = [
-    # ── Mortgage roles ──────────────────────────────────────────────────────────
     {'bank': 'RBC',                    'role': 'Mortgage Specialist Assistant',        'category': 'Mortgage'},
     {'bank': 'TD',                     'role': 'Mobile Mortgage Specialist Assistant', 'category': 'Mortgage'},
     {'bank': 'BMO',                    'role': 'Mortgage Specialist Associate',        'category': 'Mortgage'},
     {'bank': 'CIBC',                   'role': 'Mortgage Advisor Assistant',           'category': 'Mortgage'},
     {'bank': 'Scotiabank',             'role': 'Home Financing Associate',             'category': 'Mortgage'},
     {'bank': 'Meridian Credit Union',  'role': 'Mobile Mortgage Specialist',           'category': 'Mortgage'},
-
-    # ── Teller / CSR roles ──────────────────────────────────────────────────────
     {'bank': 'RBC',                    'role': 'Client Advisor',                       'category': 'Teller'},
     {'bank': 'TD',                     'role': 'Customer Experience Associate',        'category': 'Teller'},
     {'bank': 'Scotiabank',             'role': 'Customer Experience Associate',        'category': 'Teller'},
     {'bank': 'BMO',                    'role': 'Customer Service Representative',      'category': 'Teller'},
     {'bank': 'CIBC',                   'role': 'Client Service Representative',        'category': 'Teller'},
     {'bank': 'National Bank of Canada','role': 'Banking Advisor',                      'category': 'Teller'},
-    # Meridian uses two front-line titles — scrape both, dedupe by fingerprint
     {'bank': 'Meridian Credit Union',  'role': 'Member Services Representative',       'category': 'Teller'},
     {'bank': 'Meridian Credit Union',  'role': 'Financial Services Representative',    'category': 'Teller'},
     {'bank': 'Laurentian Bank',        'role': 'Customer Service Officer',             'category': 'Teller'},
     {'bank': 'Desjardins',             'role': 'Member Service Advisor',               'category': 'Teller'},
 ]
 
-# ATS career portals — one URL template per bank, {role} replaced at runtime
 BANK_ATS = {
-    'RBC': (
-        'https://jobs.rbc.com/ca/en/search-results'
-        '?keywords={role}&location=Richmond+Hill%2C+Ontario%2C+Canada'
-    ),
-    'TD': (
-        'https://jobs.td.com/en-CA/job-search-results/'
-        '?keyword={role}&location=Richmond+Hill'
-    ),
-    'BMO': (
-        'https://jobs.bmo.com/ca/en/search-results'
-        '?keywords={role}&location=Richmond+Hill%2C+Ontario'
-    ),
-    'CIBC': (
-        'https://cibc.wd3.myworkdayjobs.com/search'
-        '?q={role}&locations=Ontario'
-    ),
-    'Scotiabank': (
-        'https://jobs.scotiabank.com/search/'
-        '?q={role}&locationsearch=Richmond+Hill'
-    ),
-    'Meridian Credit Union': (
-        'https://meridian.wd3.myworkdayjobs.com/meridian_careers'
-        '?q={role}'
-    ),
-    'National Bank of Canada': (
-        'https://www.nbc.ca/about-us/careers/job-offers.html'
-        '?keywords={role}&location=Ontario'
-    ),
-    'Laurentian Bank': (
-        'https://www.laurentianbank.ca/en/about-laurentian-bank/careers'
-        '/job-offers.html?keywords={role}'
-    ),
-    'Desjardins': (
-        'https://careers.desjardins.com/en/search'
-        '?keywords={role}&location=Ontario'
-    ),
+    'RBC':        'https://jobs.rbc.com/ca/en/search-results?keywords={role}&location=Richmond+Hill%2C+Ontario%2C+Canada',
+    'TD':         'https://jobs.td.com/en-CA/job-search-results/?keyword={role}&location=Richmond+Hill',
+    'BMO':        'https://jobs.bmo.com/ca/en/search-results?keywords={role}&location=Richmond+Hill%2C+Ontario',
+    'CIBC':       'https://cibc.wd3.myworkdayjobs.com/search?q={role}&locations=Ontario',
+    'Scotiabank': 'https://jobs.scotiabank.com/search/?q={role}&locationsearch=Richmond+Hill',
+    'Meridian Credit Union': 'https://meridian.wd3.myworkdayjobs.com/meridian_careers?q={role}',
+    'National Bank of Canada': 'https://www.nbc.ca/about-us/careers/job-offers.html?keywords={role}&location=Ontario',
+    'Laurentian Bank': 'https://www.laurentianbank.ca/en/about-laurentian-bank/careers/job-offers.html?keywords={role}',
+    'Desjardins': 'https://careers.desjardins.com/en/search?keywords={role}&location=Ontario',
 }
 
 # ── State ──────────────────────────────────────────────────────────────────────
@@ -109,17 +83,12 @@ def save_state(state: set):
     os.replace(tmp, STATE_FILE)
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
-def is_gta(text: str) -> bool:
+def is_gta(text: str, strict: bool = True) -> bool:
+    cities = GTA_CITIES_STRICT if strict else GTA_CITIES_ATS
     t = text.lower()
-    return any(city in t for city in GTA_CITIES)
+    return any(city in t for city in cities)
 
 def normalize_title(title: str) -> str:
-    """
-    Strip location suffixes and branch info so that
-    'Client Advisor - Richmond Hill' and 'Client Advisor (Yonge Branch)'
-    both collapse to 'client advisor' for dedup purposes.
-    """
-    import re
     t = title.lower().strip()
     t = re.split(r'[-\u2013\u2014|(#]', t)[0].strip()
     STOPS = {
@@ -127,32 +96,26 @@ def normalize_title(title: str) -> str:
         'part', 'time', 'full', 'ft', 'pt', 'permanent', 'contract',
         'hybrid', 'remote', 'onsite',
     }
-    words = [w for w in t.split() if w not in STOPS]
-    return ' '.join(words)
+    return ' '.join(w for w in t.split() if w not in STOPS)
 
 def fingerprint(job: dict) -> str:
     return f"{job['bank'].lower()}::{normalize_title(job['title'])}"
 
 def role_matches(text: str, role: str) -> bool:
-    """
-    Require ≥60% of meaningful tokens from the role title to appear in text.
-    Stops words stripped so 'Customer Experience Associate' doesn't fail on
-    short anchor text that drops common words.
-    """
     STOPS = {'of', 'the', 'a', 'an', 'and', 'or', 'in', 'at', 'for', 'to'}
     tokens = [t for t in role.lower().split() if t not in STOPS]
     if not tokens:
         return False
-    matched = sum(1 for t in tokens if t in text.lower())
-    return matched / len(tokens) >= 0.6
+    return sum(1 for t in tokens if t in text.lower()) / len(tokens) >= 0.6
 
-def make_browser_context(playwright):
+def make_browser(playwright):
     browser = playwright.chromium.launch(
         headless=True,
         args=[
             '--no-sandbox', '--disable-setuid-sandbox',
             '--disable-dev-shm-usage', '--disable-gpu',
             '--single-process', '--no-zygote',
+            '--disable-blink-features=AutomationControlled',
         ],
     )
     ctx = browser.new_context(
@@ -162,25 +125,30 @@ def make_browser_context(playwright):
             'AppleWebKit/537.36 (KHTML, like Gecko) '
             'Chrome/124.0.0.0 Safari/537.36'
         ),
+        locale='en-CA',
+        timezone_id='America/Toronto',
+    )
+    ctx.add_init_script(
+        "Object.defineProperty(navigator, 'webdriver', {get: () => undefined})"
     )
     return browser, ctx
 
 # ── Indeed ─────────────────────────────────────────────────────────────────────
 def scrape_indeed(page, bank: str, role: str, category: str) -> list:
     log.info(f"  [Indeed] {bank} — {role}")
+    # Search with bank name in quotes to keep results tight
     query = urllib.parse.quote(f'"{role}" "{bank}"')
-    url   = (
-        f"https://ca.indeed.com/jobs"
-        f"?q={query}&l=Richmond+Hill%2C+ON&radius=30&sort=date"
-    )
-    jobs = []
+    url   = f"https://ca.indeed.com/jobs?q={query}&l=Richmond+Hill%2C+ON&radius=25&sort=date"
+    jobs  = []
     try:
-        page.goto(url, wait_until='domcontentloaded', timeout=20000)
-        page.wait_for_timeout(2500)
-        soup = BeautifulSoup(page.content(), 'html.parser')
-
+        page.goto(url, wait_until='domcontentloaded', timeout=NAV_TIMEOUT)
+        page.wait_for_timeout(WAIT_AFTER)
+        content = page.content()
+        if 'captcha' in page.url.lower() or 'Robot Check' in content:
+            log.warning(f"  [Indeed] {bank} — {role} → CAPTCHA, skipping")
+            return []
+        soup = BeautifulSoup(content, 'html.parser')
         for card in soup.find_all('div', attrs={'data-testid': 'slider_item'}):
-            # title: new testid attr first, fall back to class
             title_el = (
                 card.find(attrs={'data-testid': 'jobTitle'}) or
                 card.find('h2', class_=lambda c: c and 'jobTitle' in c)
@@ -195,25 +163,20 @@ def scrape_indeed(page, bank: str, role: str, category: str) -> list:
             )
             if not title_el or not link_el:
                 continue
-            loc_text = loc_el.get_text() if loc_el else 'Ontario'
-            if not is_gta(loc_text):
+            loc_text = loc_el.get_text() if loc_el else ''
+            # Strict GTA check for Indeed — must name a real GTA city
+            if loc_text and not is_gta(loc_text, strict=True):
                 continue
-
             jk   = link_el.get('data-jk') or link_el.get('href', '')
-            href = (
-                f"https://ca.indeed.com/viewjob?jk={jk}"
-                if not jk.startswith('http') else jk
-            )
+            href = f"https://ca.indeed.com/viewjob?jk={jk}" if not jk.startswith('http') else jk
             jobs.append({
-                'id':       jk,
-                'title':    title_el.get_text().strip(),
-                'link':     href,
-                'source':   'Indeed',
-                'bank':     bank,
-                'category': category,
+                'id': jk, 'title': title_el.get_text().strip(),
+                'link': href, 'source': 'Indeed',
+                'bank': bank, 'category': category,
             })
-
         log.info(f"  [Indeed] {bank} — {role} → {len(jobs)} found")
+    except PlaywrightTimeout:
+        log.warning(f"  [Indeed] {bank} — {role} → timeout")
     except Exception as e:
         log.warning(f"  [Indeed] {bank} — {role} → FAILED: {e}")
     return jobs
@@ -221,49 +184,44 @@ def scrape_indeed(page, bank: str, role: str, category: str) -> list:
 # ── LinkedIn ───────────────────────────────────────────────────────────────────
 def scrape_linkedin(page, bank: str, role: str, category: str) -> list:
     log.info(f"  [LinkedIn] {bank} — {role}")
+    # Quote both role AND bank — tight search, not keyword soup
     query = urllib.parse.quote(f'"{role}" "{bank}"')
     url   = (
         f"https://www.linkedin.com/jobs/search/"
-        f"?keywords={query}&location=Richmond+Hill%2C+Ontario"
-        f"&distance=30&f_TPR=r86400&sortBy=DD"
+        f"?keywords={query}&location=Greater+Toronto+Area"
+        f"&distance=25&f_TPR=r604800&sortBy=DD"
     )
     jobs = []
     try:
-        page.goto(url, wait_until='domcontentloaded', timeout=20000)
-        page.wait_for_timeout(2500)
+        page.goto(url, wait_until='domcontentloaded', timeout=NAV_TIMEOUT)
+        page.wait_for_timeout(WAIT_AFTER)
         page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
         page.wait_for_timeout(1500)
         soup = BeautifulSoup(page.content(), 'html.parser')
-
-        for card in soup.find_all(
-            'div', class_=lambda c: c and 'base-card' in c
-        ):
-            title_el = card.find(
-                'h3', class_=lambda c: c and 'base-search-card__title' in c
-            )
-            link_el = card.find(
-                'a', class_=lambda c: c and 'base-card__full-link' in c
-            )
-            loc_el = card.find(
-                'span', class_=lambda c: c and 'job-search-card__location' in c
-            )
+        for card in soup.find_all('div', class_=lambda c: c and 'base-card' in c):
+            title_el = card.find('h3', class_=lambda c: c and 'base-search-card__title' in c)
+            link_el  = card.find('a', class_=lambda c: c and 'base-card__full-link' in c)
+            comp_el  = card.find('h4', class_=lambda c: c and 'base-search-card__subtitle' in c)
+            loc_el   = card.find('span', class_=lambda c: c and 'job-search-card__location' in c)
             if not title_el or not link_el:
                 continue
-            loc_text = loc_el.get_text().strip() if loc_el else 'Ontario'
-            if not is_gta(loc_text):
+            # Extra guard: company name must contain the bank name
+            comp_text = comp_el.get_text().strip().lower() if comp_el else ''
+            if bank.lower().split()[0] not in comp_text:
                 continue
-
+            loc_text = loc_el.get_text().strip() if loc_el else ''
+            # For LinkedIn without login, location is often missing — accept if company matches
+            if loc_text and not is_gta(loc_text, strict=True):
+                continue
             href = link_el['href'].split('?')[0]
             jobs.append({
-                'id':       href,
-                'title':    title_el.get_text().strip(),
-                'link':     href,
-                'source':   'LinkedIn',
-                'bank':     bank,
-                'category': category,
+                'id': href, 'title': title_el.get_text().strip(),
+                'link': href, 'source': 'LinkedIn',
+                'bank': bank, 'category': category,
             })
-
         log.info(f"  [LinkedIn] {bank} — {role} → {len(jobs)} found")
+    except PlaywrightTimeout:
+        log.warning(f"  [LinkedIn] {bank} — {role} → timeout")
     except Exception as e:
         log.warning(f"  [LinkedIn] {bank} — {role} → FAILED: {e}")
     return jobs
@@ -276,48 +234,37 @@ def scrape_bank_ats(page, bank: str, role: str, category: str) -> list:
     url  = BANK_ATS[bank].format(role=urllib.parse.quote(role))
     jobs = []
     try:
-        page.goto(url, wait_until='domcontentloaded', timeout=20000)
-        # double scroll — catches lazy-loaded ATS results
+        page.goto(url, wait_until='domcontentloaded', timeout=NAV_TIMEOUT)
         for _ in range(2):
             page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
             page.wait_for_timeout(1500)
-
         links = page.evaluate('''() => {
-            return Array.from(document.querySelectorAll("a"))
-                .slice(0, 300)
-                .map(a => {
-                    const container = a.closest(
-                        "li, article, [class*=job], [class*=card], [class*=result]"
-                    );
-                    return {
-                        text:      (a.innerText || a.textContent || "").trim(),
-                        href:      a.href || "",
-                        container: container ? (container.innerText || "") : (
-                            a.parentElement ? a.parentElement.innerText : ""
-                        )
-                    };
-                });
+            return Array.from(document.querySelectorAll("a")).slice(0, 300).map(a => {
+                const c = a.closest("li,article,[class*=job],[class*=card],[class*=result]");
+                return {
+                    text:      (a.innerText || a.textContent || "").trim(),
+                    href:      a.href || "",
+                    container: c ? (c.innerText || "") : (a.parentElement ? a.parentElement.innerText : "")
+                };
+            });
         }''')
-
         for link in links:
-            text      = link['text'].strip()
-            href      = link['href'].strip()
+            text = link['text'].strip()
+            href = link['href'].strip()
             container = link['container'].strip()
             if (
                 len(href) > 10
                 and role_matches(text, role)
-                and (is_gta(container) or is_gta(text) or 'ontario' in container.lower())
+                and is_gta(container, strict=False)
             ):
                 jobs.append({
-                    'id':       href,
-                    'title':    text[:120],
-                    'link':     href,
-                    'source':   f'{bank} Careers',
-                    'bank':     bank,
-                    'category': category,
+                    'id': href, 'title': text[:120],
+                    'link': href, 'source': f'{bank} Careers',
+                    'bank': bank, 'category': category,
                 })
-
         log.info(f"  [ATS] {bank} — {role} → {len(jobs)} found")
+    except PlaywrightTimeout:
+        log.warning(f"  [ATS] {bank} — {role} → timeout (skipping)")
     except Exception as e:
         log.warning(f"  [ATS] {bank} — {role} → FAILED: {e}")
     return jobs
@@ -327,179 +274,106 @@ SOURCE_BADGE = {
     'Indeed':   ('#003A9B', '#E8F0FE', 'Indeed'),
     'LinkedIn': ('#0A66C2', '#E8F4FD', 'LinkedIn'),
 }
-
-BANK_LOGO = {
-    'RBC':                    '🔴',
-    'TD':                     '🟢',
-    'BMO':                    '🔵',
-    'CIBC':                   '🟥',
-    'Scotiabank':             '🟡',
-    'Meridian Credit Union':  '🟣',
-    'National Bank of Canada':'🔷',
-    'Laurentian Bank':        '🟠',
-    'Desjardins':             '🟩',
+BANK_EMOJI = {
+    'RBC': '🔴', 'TD': '🟢', 'BMO': '🔵', 'CIBC': '🟥',
+    'Scotiabank': '🟡', 'Meridian Credit Union': '🟣',
+    'National Bank of Canada': '🔷', 'Laurentian Bank': '🟠', 'Desjardins': '🟩',
 }
 
 def build_job_cards(jobs: list, accent: str) -> str:
     if not jobs:
-        return f"""
-        <div style="text-align:center;padding:32px;color:#9ca3af;font-size:14px;">
-            No new listings found in this scan.
-        </div>"""
-
+        return '<p style="color:#9ca3af;text-align:center;padding:20px;">No new listings found.</p>'
     cards = []
     for j in jobs:
-        src_color, src_bg, src_label = SOURCE_BADGE.get(
-            j['source'], ('#6b7280', '#f3f4f6', j['source'])
-        )
-        emoji = BANK_LOGO.get(j['bank'], '🏦')
+        src_color, src_bg, src_label = SOURCE_BADGE.get(j['source'], ('#6b7280', '#f3f4f6', j['source']))
+        emoji = BANK_EMOJI.get(j['bank'], '🏦')
         cards.append(f"""
         <div style="background:#ffffff;border:1px solid #e5e7eb;border-radius:12px;
-                    padding:18px 20px;margin-bottom:12px;
-                    border-left:4px solid {accent};">
-          <table width="100%" cellpadding="0" cellspacing="0">
-            <tr>
-              <td style="vertical-align:top;">
-                <div style="font-size:13px;color:#6b7280;margin-bottom:4px;">
-                  {emoji} <strong style="color:#111827;">{j['bank']}</strong>
-                </div>
-                <div style="font-size:16px;font-weight:700;color:#111827;margin-bottom:8px;
-                            line-height:1.3;">
-                  {j['title']}
-                </div>
-                <span style="display:inline-block;background:{src_bg};color:{src_color};
-                             font-size:11px;font-weight:600;padding:3px 8px;
-                             border-radius:20px;letter-spacing:0.3px;">
-                  {src_label}
-                </span>
-              </td>
-              <td style="vertical-align:middle;text-align:right;padding-left:16px;
-                         white-space:nowrap;">
-                <a href="{j['link']}"
-                   style="display:inline-block;background:{accent};color:#ffffff;
-                          font-size:13px;font-weight:700;padding:10px 20px;
-                          border-radius:8px;text-decoration:none;letter-spacing:0.2px;">
-                  Apply →
-                </a>
-              </td>
-            </tr>
-          </table>
+                    padding:18px 20px;margin-bottom:12px;border-left:4px solid {accent};">
+          <table width="100%" cellpadding="0" cellspacing="0"><tr>
+            <td style="vertical-align:top;">
+              <div style="font-size:13px;color:#6b7280;margin-bottom:4px;">
+                {emoji} <strong style="color:#111827;">{j['bank']}</strong>
+              </div>
+              <div style="font-size:16px;font-weight:700;color:#111827;
+                          margin-bottom:8px;line-height:1.3;">{j['title']}</div>
+              <span style="background:{src_bg};color:{src_color};font-size:11px;
+                           font-weight:600;padding:3px 8px;border-radius:20px;">
+                {src_label}
+              </span>
+            </td>
+            <td style="vertical-align:middle;text-align:right;padding-left:16px;white-space:nowrap;">
+              <a href="{j['link']}"
+                 style="display:inline-block;background:{accent};color:#ffffff;
+                        font-size:13px;font-weight:700;padding:10px 20px;
+                        border-radius:8px;text-decoration:none;">Apply →</a>
+            </td>
+          </tr></table>
         </div>""")
-
     return ''.join(cards)
 
-
 def build_section(title: str, icon: str, accent: str, jobs: list) -> str:
-    count = len(jobs)
-    badge_bg  = accent + '22'   # transparent tint
     return f"""
     <div style="margin-bottom:32px;">
-      <table width="100%" cellpadding="0" cellspacing="0"
-             style="margin-bottom:16px;">
-        <tr>
-          <td>
-            <span style="font-size:20px;font-weight:800;color:#111827;">
-              {icon}&nbsp; {title}
-            </span>
-          </td>
-          <td style="text-align:right;">
-            <span style="background:{badge_bg};color:{accent};font-size:13px;
-                         font-weight:700;padding:4px 12px;border-radius:20px;">
-              {count} new
-            </span>
-          </td>
-        </tr>
-      </table>
+      <table width="100%" cellpadding="0" cellspacing="0" style="margin-bottom:16px;"><tr>
+        <td><span style="font-size:20px;font-weight:800;color:#111827;">{icon}&nbsp;{title}</span></td>
+        <td style="text-align:right;">
+          <span style="background:{accent}22;color:{accent};font-size:13px;font-weight:700;
+                       padding:4px 12px;border-radius:20px;">{len(jobs)} new</span>
+        </td>
+      </tr></table>
       {build_job_cards(jobs, accent)}
     </div>"""
 
-
 def send_email(new_jobs: list):
     if not RESEND_API_KEY:
-        log.error("  [Email] RESEND_API_KEY not set — skipping send")
+        log.error("  [Email] RESEND_API_KEY not set — skipping")
         return
 
-    from datetime import datetime
     mortgage_jobs = [j for j in new_jobs if j['category'] == 'Mortgage']
     teller_jobs   = [j for j in new_jobs if j['category'] == 'Teller']
     scan_time     = datetime.utcnow().strftime('%B %d, %Y — %H:%M UTC')
 
-    html = f"""<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>Ontario Bank Job Alert</title>
-</head>
-<body style="margin:0;padding:0;background:#f3f4f6;font-family:-apple-system,BlinkMacSystemFont,
-             'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">
-
-  <!-- Wrapper -->
-  <table width="100%" cellpadding="0" cellspacing="0"
-         style="background:#f3f4f6;padding:32px 16px;">
-    <tr><td align="center">
-      <table width="600" cellpadding="0" cellspacing="0"
-             style="max-width:600px;width:100%;">
-
-        <!-- Header -->
-        <tr><td style="background:linear-gradient(135deg,#1e3a5f 0%,#2d6a9f 100%);
-                        border-radius:16px 16px 0 0;padding:36px 40px;text-align:center;">
-          <div style="font-size:28px;font-weight:800;color:#ffffff;
-                      letter-spacing:-0.5px;margin-bottom:8px;">
-            🏦 Ontario Bank Job Alert
-          </div>
-          <div style="font-size:14px;color:#93c5fd;margin-bottom:20px;">
-            {len(new_jobs)} new listing{'s' if len(new_jobs) != 1 else ''} found &nbsp;·&nbsp; {scan_time}
-          </div>
-          <!-- Stats pills -->
-          <table cellpadding="0" cellspacing="0" style="margin:0 auto;">
-            <tr>
-              <td style="background:rgba(255,255,255,0.15);border-radius:24px;
-                          padding:8px 20px;margin:0 6px;text-align:center;">
-                <div style="font-size:22px;font-weight:800;color:#ffffff;">
-                  {len(mortgage_jobs)}
-                </div>
-                <div style="font-size:11px;color:#bfdbfe;text-transform:uppercase;
-                             letter-spacing:1px;">Mortgage</div>
-              </td>
-              <td style="width:12px;"></td>
-              <td style="background:rgba(255,255,255,0.15);border-radius:24px;
-                          padding:8px 20px;text-align:center;">
-                <div style="font-size:22px;font-weight:800;color:#ffffff;">
-                  {len(teller_jobs)}
-                </div>
-                <div style="font-size:11px;color:#bfdbfe;text-transform:uppercase;
-                             letter-spacing:1px;">Teller / CSR</div>
-              </td>
-            </tr>
-          </table>
-        </td></tr>
-
-        <!-- Body -->
-        <tr><td style="background:#f9fafb;padding:32px 40px;
-                        border-radius:0 0 16px 16px;border:1px solid #e5e7eb;
-                        border-top:none;">
-
-          {build_section('Mortgage Roles', '🏠', '#1d6fa4', mortgage_jobs)}
-          {build_section('Teller / CSR Roles', '💼', '#0d9488', teller_jobs)}
-
-          <!-- Footer -->
-          <div style="border-top:1px solid #e5e7eb;padding-top:20px;margin-top:8px;
-                      text-align:center;font-size:12px;color:#9ca3af;">
-            Scanned Indeed · LinkedIn · Bank Career Portals &nbsp;·&nbsp;
-            GTA radius 30km<br>
-            <span style="margin-top:6px;display:inline-block;">
-              Sent by your job scraper — running hourly on Railway 🚂
-            </span>
-          </div>
-
-        </td></tr>
-      </table>
-    </td></tr>
-  </table>
-
-</body>
-</html>"""
+    html = f"""<!DOCTYPE html><html lang="en"><head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+</head><body style="margin:0;padding:0;background:#f3f4f6;
+  font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Arial,sans-serif;">
+<table width="100%" cellpadding="0" cellspacing="0" style="background:#f3f4f6;padding:32px 16px;">
+<tr><td align="center">
+<table width="600" cellpadding="0" cellspacing="0" style="max-width:600px;width:100%;">
+  <tr><td style="background:linear-gradient(135deg,#1e3a5f 0%,#2d6a9f 100%);
+                  border-radius:16px 16px 0 0;padding:36px 40px;text-align:center;">
+    <div style="font-size:28px;font-weight:800;color:#fff;margin-bottom:8px;">
+      🏦 Ontario Bank Job Alert
+    </div>
+    <div style="font-size:14px;color:#93c5fd;margin-bottom:20px;">
+      {len(new_jobs)} new listing{'s' if len(new_jobs)!=1 else ''} &nbsp;·&nbsp; {scan_time}
+    </div>
+    <table cellpadding="0" cellspacing="0" style="margin:0 auto;"><tr>
+      <td style="background:rgba(255,255,255,0.15);border-radius:24px;padding:8px 20px;text-align:center;">
+        <div style="font-size:22px;font-weight:800;color:#fff;">{len(mortgage_jobs)}</div>
+        <div style="font-size:11px;color:#bfdbfe;text-transform:uppercase;letter-spacing:1px;">Mortgage</div>
+      </td>
+      <td style="width:12px;"></td>
+      <td style="background:rgba(255,255,255,0.15);border-radius:24px;padding:8px 20px;text-align:center;">
+        <div style="font-size:22px;font-weight:800;color:#fff;">{len(teller_jobs)}</div>
+        <div style="font-size:11px;color:#bfdbfe;text-transform:uppercase;letter-spacing:1px;">Teller / CSR</div>
+      </td>
+    </tr></table>
+  </td></tr>
+  <tr><td style="background:#f9fafb;padding:32px 40px;
+                  border-radius:0 0 16px 16px;border:1px solid #e5e7eb;border-top:none;">
+    {build_section('Mortgage Roles', '🏠', '#1d6fa4', mortgage_jobs)}
+    {build_section('Teller / CSR Roles', '💼', '#0d9488', teller_jobs)}
+    <div style="border-top:1px solid #e5e7eb;padding-top:20px;margin-top:8px;
+                text-align:center;font-size:12px;color:#9ca3af;">
+      Scanned Indeed · LinkedIn · Bank Career Portals &nbsp;·&nbsp; GTA 25km radius<br>
+      <span style="margin-top:6px;display:inline-block;">Running hourly on Railway 🚂</span>
+    </div>
+  </td></tr>
+</table>
+</td></tr></table>
+</body></html>"""
 
     try:
         res = requests.post(
@@ -511,19 +385,21 @@ def send_email(new_jobs: list):
             json={
                 'from':    f'Job Alert <{FROM_EMAIL}>',
                 'to':      [ALERT_EMAIL],
-                'subject': f'🏦 {len(new_jobs)} New Ontario Bank Role{"s" if len(new_jobs) != 1 else ""} Found',
+                'subject': f'🏦 {len(new_jobs)} New Ontario Bank Role{"s" if len(new_jobs)!=1 else ""} Found',
                 'html':    html,
             },
             timeout=15,
         )
+        # Log the full response so we can see exactly what Resend says
+        log.info(f"  [Email] Resend response {res.status_code}: {res.text[:300]}")
         if res.status_code in (200, 201):
-            log.info(f"  [Email] Sent — {len(new_jobs)} jobs to {ALERT_EMAIL}")
+            log.info(f"  [Email] ✓ Sent — {len(new_jobs)} jobs to {ALERT_EMAIL}")
         else:
-            log.error(f"  [Email] Failed {res.status_code}: {res.text}")
+            log.error(f"  [Email] ✗ Failed {res.status_code}: {res.text}")
     except Exception as e:
         log.error(f"  [Email] Error: {e}")
 
-# ── Collect helper ─────────────────────────────────────────────────────────────
+# ── Collect ────────────────────────────────────────────────────────────────────
 def collect(jobs_list: list, new_jobs: list, seen: set, seen_fps: set):
     for job in jobs_list:
         fp = fingerprint(job)
@@ -531,67 +407,45 @@ def collect(jobs_list: list, new_jobs: list, seen: set, seen_fps: set):
             new_jobs.append(job)
             seen_fps.add(fp)
 
-# ── Main run ───────────────────────────────────────────────────────────────────
+# ── Main ───────────────────────────────────────────────────────────────────────
 def run():
     log.info("═══ Scan started ═══")
-
     if not RESEND_API_KEY:
-        log.warning("  [Warn] RESEND_API_KEY not set — jobs found but not emailed")
+        log.warning("  [Warn] RESEND_API_KEY not set")
 
     seen:     set  = load_state()
     new_jobs: list = []
     seen_fps: set  = set()
-
     log.info(f"  [State] {len(seen)} jobs already seen")
 
     with sync_playwright() as p:
-        browser, ctx = make_browser_context(p)
+        browser, ctx = make_browser(p)
         page = ctx.new_page()
 
-        # Phase 1 — Indeed
         log.info("  ── Phase 1: Indeed ──")
         for t in TARGETS:
-            results = scrape_indeed(page, t['bank'], t['role'], t['category'])
-            collect(results, new_jobs, seen, seen_fps)
+            collect(scrape_indeed(page, t['bank'], t['role'], t['category']), new_jobs, seen, seen_fps)
             time.sleep(2)
 
-        # Phase 2 — LinkedIn
         log.info("  ── Phase 2: LinkedIn ──")
         for t in TARGETS:
-            results = scrape_linkedin(page, t['bank'], t['role'], t['category'])
-            collect(results, new_jobs, seen, seen_fps)
+            collect(scrape_linkedin(page, t['bank'], t['role'], t['category']), new_jobs, seen, seen_fps)
             time.sleep(2)
 
-        # Phase 3 — ATS (per-target 30s timeout so one stuck bank can't block)
         log.info("  ── Phase 3: ATS ──")
         for t in TARGETS:
-            def _timeout(sig, frame):
-                raise TimeoutError()
-            signal.signal(signal.SIGALRM, _timeout)
-            signal.alarm(30)
-            try:
-                results = scrape_bank_ats(page, t['bank'], t['role'], t['category'])
-                signal.alarm(0)
-                collect(results, new_jobs, seen, seen_fps)
-            except TimeoutError:
-                signal.alarm(0)
-                log.warning(f"  [ATS] Timeout: {t['bank']} — {t['role']}")
-            except Exception as e:
-                signal.alarm(0)
-                log.warning(f"  [ATS] Error: {t['bank']} — {t['role']}: {e}")
+            collect(scrape_bank_ats(page, t['bank'], t['role'], t['category']), new_jobs, seen, seen_fps)
             time.sleep(1)
 
         browser.close()
 
     log.info(f"  [Result] {len(new_jobs)} new jobs found")
-
     if new_jobs:
         send_email(new_jobs)
         seen.update(job['id'] for job in new_jobs)
         save_state(seen)
     else:
         log.info("  [Result] Nothing new — no email sent")
-
     log.info("═══ Scan complete ═══")
 
 
