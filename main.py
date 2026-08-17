@@ -113,8 +113,25 @@ def is_gta(text: str) -> bool:
     t = text.lower()
     return any(city in t for city in GTA_CITIES)
 
+def normalize_title(title: str) -> str:
+    """
+    Strip location suffixes and branch info so that
+    'Client Advisor - Richmond Hill' and 'Client Advisor (Yonge Branch)'
+    both collapse to 'client advisor' for dedup purposes.
+    """
+    import re
+    t = title.lower().strip()
+    t = re.split(r'[-\u2013\u2014|(#]', t)[0].strip()
+    STOPS = {
+        'branch', 'location', 'ontario', 'toronto', 'richmond', 'hill',
+        'part', 'time', 'full', 'ft', 'pt', 'permanent', 'contract',
+        'hybrid', 'remote', 'onsite',
+    }
+    words = [w for w in t.split() if w not in STOPS]
+    return ' '.join(words)
+
 def fingerprint(job: dict) -> str:
-    return f"{job['bank'].lower()}::{job['title'].lower().strip()}"
+    return f"{job['bank'].lower()}::{normalize_title(job['title'])}"
 
 def role_matches(text: str, role: str) -> bool:
     """
