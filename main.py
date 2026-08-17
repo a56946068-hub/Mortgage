@@ -23,7 +23,7 @@ RESEND_API_KEY = os.environ.get('RESEND_API_KEY', '').strip()
 ALERT_EMAIL    = os.environ.get('ALERT_EMAIL', 'n.hesabian@gmail.com').strip()
 FROM_EMAIL     = os.environ.get('FROM_EMAIL', 'onboarding@resend.dev').strip()
 STATE_FILE     = '/tmp/seen_jobs.json'
-NAV_TIMEOUT    = 25000
+NAV_TIMEOUT    = 45000
 WAIT_AFTER     = 2500
 
 GTA_CITIES = {
@@ -63,9 +63,9 @@ BANK_ATS = {
     'CIBC':       'https://cibc.wd3.myworkdayjobs.com/search?q={role}&locations=Ontario',
     'Scotiabank': 'https://jobs.scotiabank.com/search/?q={role}&locationsearch=Richmond+Hill',
     'Meridian Credit Union': 'https://meridian.wd3.myworkdayjobs.com/meridian_careers?q={role}',
-    'National Bank of Canada': 'https://www.nbc.ca/about-us/careers/job-offers.html?keywords={role}&location=Ontario',
-    'Laurentian Bank': 'https://www.laurentianbank.ca/en/about-laurentian-bank/careers/job-offers.html?keywords={role}',
-    'Desjardins': 'https://careers.desjardins.com/en/search?keywords={role}&location=Ontario',
+    'National Bank of Canada': 'https://bnc.wd3.myworkdayjobs.com/en-US/BNC?q={role}',
+    'Laurentian Bank': 'https://laurentianbank.wd3.myworkdayjobs.com/LBC?q={role}',
+    'Desjardins': 'https://desjardins.wd10.myworkdayjobs.com/Desjardins?q={role}',
 }
 
 # ── State ──────────────────────────────────────────────────────────────────────
