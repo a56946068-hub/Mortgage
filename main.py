@@ -306,47 +306,183 @@ def scrape_bank_ats(page, bank: str, role: str, category: str) -> list:
     return jobs
 
 # ── Email ──────────────────────────────────────────────────────────────────────
-def build_html_table(jobs: list) -> str:
+SOURCE_BADGE = {
+    'Indeed':   ('#003A9B', '#E8F0FE', 'Indeed'),
+    'LinkedIn': ('#0A66C2', '#E8F4FD', 'LinkedIn'),
+}
+
+BANK_LOGO = {
+    'RBC':                    '🔴',
+    'TD':                     '🟢',
+    'BMO':                    '🔵',
+    'CIBC':                   '🟥',
+    'Scotiabank':             '🟡',
+    'Meridian Credit Union':  '🟣',
+    'National Bank of Canada':'🔷',
+    'Laurentian Bank':        '🟠',
+    'Desjardins':             '🟩',
+}
+
+def build_job_cards(jobs: list, accent: str) -> str:
     if not jobs:
-        return "<p><i>No new jobs found in this category.</i></p>"
-    rows = ''.join(
-        f"<tr>"
-        f"<td>{j['bank']}</td>"
-        f"<td>{j['title']}</td>"
-        f"<td>{j['source']}</td>"
-        f"<td><a href='{j['link']}'>View</a></td>"
-        f"</tr>"
-        for j in jobs
-    )
-    return (
-        "<table>"
-        "<tr><th>Bank</th><th>Role</th><th>Source</th><th>Link</th></tr>"
-        f"{rows}"
-        "</table>"
-    )
+        return f"""
+        <div style="text-align:center;padding:32px;color:#9ca3af;font-size:14px;">
+            No new listings found in this scan.
+        </div>"""
+
+    cards = []
+    for j in jobs:
+        src_color, src_bg, src_label = SOURCE_BADGE.get(
+            j['source'], ('#6b7280', '#f3f4f6', j['source'])
+        )
+        emoji = BANK_LOGO.get(j['bank'], '🏦')
+        cards.append(f"""
+        <div style="background:#ffffff;border:1px solid #e5e7eb;border-radius:12px;
+                    padding:18px 20px;margin-bottom:12px;
+                    border-left:4px solid {accent};">
+          <table width="100%" cellpadding="0" cellspacing="0">
+            <tr>
+              <td style="vertical-align:top;">
+                <div style="font-size:13px;color:#6b7280;margin-bottom:4px;">
+                  {emoji} <strong style="color:#111827;">{j['bank']}</strong>
+                </div>
+                <div style="font-size:16px;font-weight:700;color:#111827;margin-bottom:8px;
+                            line-height:1.3;">
+                  {j['title']}
+                </div>
+                <span style="display:inline-block;background:{src_bg};color:{src_color};
+                             font-size:11px;font-weight:600;padding:3px 8px;
+                             border-radius:20px;letter-spacing:0.3px;">
+                  {src_label}
+                </span>
+              </td>
+              <td style="vertical-align:middle;text-align:right;padding-left:16px;
+                         white-space:nowrap;">
+                <a href="{j['link']}"
+                   style="display:inline-block;background:{accent};color:#ffffff;
+                          font-size:13px;font-weight:700;padding:10px 20px;
+                          border-radius:8px;text-decoration:none;letter-spacing:0.2px;">
+                  Apply →
+                </a>
+              </td>
+            </tr>
+          </table>
+        </div>""")
+
+    return ''.join(cards)
+
+
+def build_section(title: str, icon: str, accent: str, jobs: list) -> str:
+    count = len(jobs)
+    badge_bg  = accent + '22'   # transparent tint
+    return f"""
+    <div style="margin-bottom:32px;">
+      <table width="100%" cellpadding="0" cellspacing="0"
+             style="margin-bottom:16px;">
+        <tr>
+          <td>
+            <span style="font-size:20px;font-weight:800;color:#111827;">
+              {icon}&nbsp; {title}
+            </span>
+          </td>
+          <td style="text-align:right;">
+            <span style="background:{badge_bg};color:{accent};font-size:13px;
+                         font-weight:700;padding:4px 12px;border-radius:20px;">
+              {count} new
+            </span>
+          </td>
+        </tr>
+      </table>
+      {build_job_cards(jobs, accent)}
+    </div>"""
+
 
 def send_email(new_jobs: list):
     if not RESEND_API_KEY:
         log.error("  [Email] RESEND_API_KEY not set — skipping send")
         return
 
+    from datetime import datetime
     mortgage_jobs = [j for j in new_jobs if j['category'] == 'Mortgage']
     teller_jobs   = [j for j in new_jobs if j['category'] == 'Teller']
+    scan_time     = datetime.utcnow().strftime('%B %d, %Y — %H:%M UTC')
 
-    html = f"""<html><head><style>
-      body      {{ font-family: Arial, sans-serif; color: #333; }}
-      table     {{ border-collapse: collapse; width: 100%; margin-bottom: 20px; }}
-      th, td    {{ border: 1px solid #ddd; padding: 8px; text-align: left; }}
-      th        {{ background: #f2f2f2; }}
-      a         {{ color: #0066cc; font-weight: bold; text-decoration: none; }}
-      h2        {{ color: #2c3e50; border-bottom: 2px solid #eee; padding-bottom: 5px; }}
-    </style></head><body>
-      <h1>Ontario Bank Job Alert</h1>
-      <h2>Mortgage Roles ({len(mortgage_jobs)})</h2>
-      {build_html_table(mortgage_jobs)}
-      <h2>Teller / CSR Roles ({len(teller_jobs)})</h2>
-      {build_html_table(teller_jobs)}
-    </body></html>"""
+    html = f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Ontario Bank Job Alert</title>
+</head>
+<body style="margin:0;padding:0;background:#f3f4f6;font-family:-apple-system,BlinkMacSystemFont,
+             'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">
+
+  <!-- Wrapper -->
+  <table width="100%" cellpadding="0" cellspacing="0"
+         style="background:#f3f4f6;padding:32px 16px;">
+    <tr><td align="center">
+      <table width="600" cellpadding="0" cellspacing="0"
+             style="max-width:600px;width:100%;">
+
+        <!-- Header -->
+        <tr><td style="background:linear-gradient(135deg,#1e3a5f 0%,#2d6a9f 100%);
+                        border-radius:16px 16px 0 0;padding:36px 40px;text-align:center;">
+          <div style="font-size:28px;font-weight:800;color:#ffffff;
+                      letter-spacing:-0.5px;margin-bottom:8px;">
+            🏦 Ontario Bank Job Alert
+          </div>
+          <div style="font-size:14px;color:#93c5fd;margin-bottom:20px;">
+            {len(new_jobs)} new listing{'s' if len(new_jobs) != 1 else ''} found &nbsp;·&nbsp; {scan_time}
+          </div>
+          <!-- Stats pills -->
+          <table cellpadding="0" cellspacing="0" style="margin:0 auto;">
+            <tr>
+              <td style="background:rgba(255,255,255,0.15);border-radius:24px;
+                          padding:8px 20px;margin:0 6px;text-align:center;">
+                <div style="font-size:22px;font-weight:800;color:#ffffff;">
+                  {len(mortgage_jobs)}
+                </div>
+                <div style="font-size:11px;color:#bfdbfe;text-transform:uppercase;
+                             letter-spacing:1px;">Mortgage</div>
+              </td>
+              <td style="width:12px;"></td>
+              <td style="background:rgba(255,255,255,0.15);border-radius:24px;
+                          padding:8px 20px;text-align:center;">
+                <div style="font-size:22px;font-weight:800;color:#ffffff;">
+                  {len(teller_jobs)}
+                </div>
+                <div style="font-size:11px;color:#bfdbfe;text-transform:uppercase;
+                             letter-spacing:1px;">Teller / CSR</div>
+              </td>
+            </tr>
+          </table>
+        </td></tr>
+
+        <!-- Body -->
+        <tr><td style="background:#f9fafb;padding:32px 40px;
+                        border-radius:0 0 16px 16px;border:1px solid #e5e7eb;
+                        border-top:none;">
+
+          {build_section('Mortgage Roles', '🏠', '#1d6fa4', mortgage_jobs)}
+          {build_section('Teller / CSR Roles', '💼', '#0d9488', teller_jobs)}
+
+          <!-- Footer -->
+          <div style="border-top:1px solid #e5e7eb;padding-top:20px;margin-top:8px;
+                      text-align:center;font-size:12px;color:#9ca3af;">
+            Scanned Indeed · LinkedIn · Bank Career Portals &nbsp;·&nbsp;
+            GTA radius 30km<br>
+            <span style="margin-top:6px;display:inline-block;">
+              Sent by your job scraper — running hourly on Railway 🚂
+            </span>
+          </div>
+
+        </td></tr>
+      </table>
+    </td></tr>
+  </table>
+
+</body>
+</html>"""
 
     try:
         res = requests.post(
@@ -356,9 +492,9 @@ def send_email(new_jobs: list):
                 'Content-Type':  'application/json',
             },
             json={
-                'from':    f'Job Scraper <{FROM_EMAIL}>',
+                'from':    f'Job Alert <{FROM_EMAIL}>',
                 'to':      [ALERT_EMAIL],
-                'subject': f'Job Alert: {len(new_jobs)} New Ontario Bank Role(s)',
+                'subject': f'🏦 {len(new_jobs)} New Ontario Bank Role{"s" if len(new_jobs) != 1 else ""} Found',
                 'html':    html,
             },
             timeout=15,
