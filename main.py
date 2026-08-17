@@ -433,8 +433,14 @@ def run():
             time.sleep(2)
 
         log.info("  ── Phase 3: ATS ──")
+        # Fresh page per ATS target — one crashed bank page can't kill the rest
         for t in TARGETS:
-            collect(scrape_bank_ats(page, t['bank'], t['role'], t['category']), new_jobs, seen, seen_fps)
+            try:
+                ats_page = ctx.new_page()
+                collect(scrape_bank_ats(ats_page, t['bank'], t['role'], t['category']), new_jobs, seen, seen_fps)
+                ats_page.close()
+            except Exception as e:
+                log.warning(f"  [ATS] Page lifecycle error for {t['bank']}: {e}")
             time.sleep(1)
 
         browser.close()
