@@ -161,7 +161,8 @@ def scrape_indeed(page, bank: str, role: str, category: str) -> list:
                     pass
 
         page.on('response', handle_response)
-        page.goto(url, wait_until='networkidle', timeout=NAV_TIMEOUT)
+        page.goto(url, wait_until='domcontentloaded', timeout=NAV_TIMEOUT)
+        page.wait_for_timeout(3000)  # give XHR time to fire
         page.wait_for_timeout(2000)
         page.remove_listener('response', handle_response)
 
@@ -459,32 +460,40 @@ def run():
     seen_fps: set  = set()
     log.info(f"  [State] {len(seen)} jobs already seen")
 
-    with sync_playwright() as p:
-        browser, ctx = make_browser(p)
-        page = ctx.new_page()
+    def run_phase(phase_name, targets_fn):
+        """Run a scraping phase in its own browser — crash isolation."""
+        try:
+            with sync_playwright() as p:
+                browser, ctx = make_browser(p)
+                page = ctx.new_page()
+                log.info(f"  ── {phase_name} ──")
+                for t in TARGETS:
+                    results = targets_fn(page, ctx, t)
+                    collect(results, new_jobs, seen, seen_fps)
+                    time.sleep(2)
+                browser.close()
+        except Exception as e:
+            log.error(f"  [{phase_name}] Browser crashed: {e}")
 
-        log.info("  ── Phase 1: Indeed ──")
-        for t in TARGETS:
-            collect(scrape_indeed(page, t['bank'], t['role'], t['category']), new_jobs, seen, seen_fps)
-            time.sleep(2)
+    def indeed_fn(page, ctx, t):
+        return scrape_indeed(page, t['bank'], t['role'], t['category'])
 
-        log.info("  ── Phase 2: LinkedIn ──")
-        for t in TARGETS:
-            collect(scrape_linkedin(page, t['bank'], t['role'], t['category']), new_jobs, seen, seen_fps)
-            time.sleep(2)
+    def linkedin_fn(page, ctx, t):
+        return scrape_linkedin(page, t['bank'], t['role'], t['category'])
 
-        log.info("  ── Phase 3: ATS ──")
-        # Fresh page per ATS target — one crashed bank page can't kill the rest
-        for t in TARGETS:
-            try:
-                ats_page = ctx.new_page()
-                collect(scrape_bank_ats(ats_page, t['bank'], t['role'], t['category']), new_jobs, seen, seen_fps)
-                ats_page.close()
-            except Exception as e:
-                log.warning(f"  [ATS] Page lifecycle error for {t['bank']}: {e}")
-            time.sleep(1)
+    def ats_fn(page, ctx, t):
+        try:
+            ats_page = ctx.new_page()
+            results = scrape_bank_ats(ats_page, t['bank'], t['role'], t['category'])
+            ats_page.close()
+            return results
+        except Exception as e:
+            log.warning(f"  [ATS] Page error {t['bank']}: {e}")
+            return []
 
-        browser.close()
+    run_phase("Phase 1: Indeed", indeed_fn)
+    run_phase("Phase 2: LinkedIn", linkedin_fn)
+    run_phase("Phase 3: ATS", ats_fn)
 
     log.info(f"  [Result] {len(new_jobs)} new jobs found")
     if new_jobs:
