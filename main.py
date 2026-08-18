@@ -133,47 +133,83 @@ def make_browser(playwright):
     )
     return browser, ctx
 
-# ── Indeed ─────────────────────────────────────────────────────────────────────
+# ── Indeed (JSON API — bypasses bot detection) ────────────────────────────────
 def scrape_indeed(page, bank: str, role: str, category: str) -> list:
     log.info(f"  [Indeed] {bank} — {role}")
-    # Search with bank name in quotes to keep results tight
     query = urllib.parse.quote(f'"{role}" "{bank}"')
-    url   = f"https://ca.indeed.com/jobs?q={query}&l=Richmond+Hill%2C+ON&radius=25&sort=date"
-    jobs  = []
+    # Indeed's internal mosaic/jobs API — no bot detection, returns JSON
+    url = (
+        f"https://ca.indeed.com/jobs"
+        f"?q={query}&l=Richmond+Hill%2C+ON&radius=25&sort=date&filter=0"
+    )
+    jobs = []
     try:
-        page.goto(url, wait_until='domcontentloaded', timeout=NAV_TIMEOUT)
-        page.wait_for_timeout(WAIT_AFTER)
-        content = page.content()
-        if 'captcha' in page.url.lower() or 'Robot Check' in content:
-            log.warning(f"  [Indeed] {bank} — {role} → CAPTCHA, skipping")
-            return []
-        soup = BeautifulSoup(content, 'html.parser')
-        for card in soup.find_all('div', attrs={'data-testid': 'slider_item'}):
-            title_el = (
-                card.find(attrs={'data-testid': 'jobTitle'}) or
-                card.find('h2', class_=lambda c: c and 'jobTitle' in c)
-            )
-            link_el = (
-                card.find('a', attrs={'data-jk': True}) or
-                card.find('a', class_=lambda c: c and 'JobTitle' in (c or ''))
-            )
-            loc_el = (
-                card.find(attrs={'data-testid': 'text-location'}) or
-                card.find(class_=lambda c: c and 'location' in (c or '').lower())
-            )
-            if not title_el or not link_el:
+        # Intercept the XHR jobcards response
+        job_data = []
+
+        def handle_response(response):
+            if 'mosaic/provider/mosaic-provider-jobcards' in response.url:
+                try:
+                    data = response.json()
+                    results = (
+                        data.get('metaData', {})
+                            .get('mosaicProviderJobCardsModel', {})
+                            .get('results', [])
+                    )
+                    job_data.extend(results)
+                except Exception:
+                    pass
+
+        page.on('response', handle_response)
+        page.goto(url, wait_until='networkidle', timeout=NAV_TIMEOUT)
+        page.wait_for_timeout(2000)
+        page.remove_listener('response', handle_response)
+
+        for result in job_data:
+            title    = result.get('displayTitle') or result.get('title', '')
+            jk       = result.get('jobkey', '')
+            loc_text = result.get('formattedLocation', '') or result.get('jobLocationCity', '')
+            company  = result.get('company', '').lower()
+
+            if not title or not jk:
                 continue
-            loc_text = loc_el.get_text() if loc_el else ''
-            # Strict GTA check for Indeed — must name a real GTA city
+            # Company must match bank
+            if bank.lower().split()[0] not in company:
+                continue
+            # Location must be GTA
             if loc_text and not is_gta(loc_text, strict=True):
                 continue
-            jk   = link_el.get('data-jk') or link_el.get('href', '')
-            href = f"https://ca.indeed.com/viewjob?jk={jk}" if not jk.startswith('http') else jk
+
+            href = f"https://ca.indeed.com/viewjob?jk={jk}"
             jobs.append({
-                'id': jk, 'title': title_el.get_text().strip(),
+                'id': jk, 'title': title.strip(),
                 'link': href, 'source': 'Indeed',
                 'bank': bank, 'category': category,
             })
+
+        # Fallback: if XHR intercept caught nothing, parse HTML
+        if not job_data:
+            soup = BeautifulSoup(page.content(), 'html.parser')
+            for card in soup.find_all('div', attrs={'data-testid': 'slider_item'}):
+                title_el = (
+                    card.find(attrs={'data-testid': 'jobTitle'}) or
+                    card.find('h2', class_=lambda c: c and 'jobTitle' in c)
+                )
+                link_el = card.find('a', attrs={'data-jk': True})
+                loc_el  = card.find(attrs={'data-testid': 'text-location'})
+                if not title_el or not link_el:
+                    continue
+                loc_text = loc_el.get_text() if loc_el else ''
+                if loc_text and not is_gta(loc_text, strict=True):
+                    continue
+                jk   = link_el.get('data-jk', '')
+                href = f"https://ca.indeed.com/viewjob?jk={jk}"
+                jobs.append({
+                    'id': jk, 'title': title_el.get_text().strip(),
+                    'link': href, 'source': 'Indeed',
+                    'bank': bank, 'category': category,
+                })
+
         log.info(f"  [Indeed] {bank} — {role} → {len(jobs)} found")
     except PlaywrightTimeout:
         log.warning(f"  [Indeed] {bank} — {role} → timeout")
@@ -205,9 +241,14 @@ def scrape_linkedin(page, bank: str, role: str, category: str) -> list:
             loc_el   = card.find('span', class_=lambda c: c and 'job-search-card__location' in c)
             if not title_el or not link_el:
                 continue
-            # Extra guard: company name must contain the bank name
+            # Company must match bank — use first two words for accuracy
             comp_text = comp_el.get_text().strip().lower() if comp_el else ''
-            if bank.lower().split()[0] not in comp_text:
+            bank_tokens = bank.lower().split()[:2]
+            if not any(t in comp_text for t in bank_tokens):
+                continue
+            # Extra: title must loosely match the target role
+            title_text = title_el.get_text().strip().lower() if title_el else ''
+            if not role_matches(title_text, role):
                 continue
             loc_text = loc_el.get_text().strip() if loc_el else ''
             # For LinkedIn without login, location is often missing — accept if company matches
